@@ -35,4 +35,6 @@ The seed is clean and does not create demo hotels. Bootstrap the first super adm
 - Hotel tenants: `hotel-subdomain.domain.com`
 - Super admin: `admin.domain.com` or `/super-admin` on the primary app.
 
-Local switching works with `http://localhost:5173/?hotel=hotel-subdomain`.
+Set `VITE_PRIMARY_DOMAIN` for the frontend and `PRIMARY_DOMAIN` for the backend to the same root domain, for example `example.com`. The Super Admin console will generate hotel links like `https://hotel-ranjeet.example.com/`.
+
+Local switching works with localhost subdomains, for example `http://hotel-ranjeet.localhost:5173/`.

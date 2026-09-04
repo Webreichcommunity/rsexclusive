@@ -19,11 +19,13 @@ npm run dev
 
 The backend reads `.env` from the project root. The Vite frontend reads public `VITE_*` variables from `client/.env.local` when you need Firebase web config in the browser.
 
-Local tenant switching after creating a hotel:
+Local tenant switching after creating a hotel uses the hotel subdomain:
 
 ```text
-http://localhost:5173/?hotel=your-hotel-subdomain
+http://your-hotel-subdomain.localhost:5173/
 ```
+
+For production, set `VITE_PRIMARY_DOMAIN` and backend `PRIMARY_DOMAIN` to your real root domain, for example `example.com`. Hotel links will then open as `https://your-hotel-subdomain.example.com/`.
 
 The backend requires `DATABASE_URL` for real database operations. Apply the schema and clean seed:
 

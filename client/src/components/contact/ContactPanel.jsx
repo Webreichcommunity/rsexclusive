@@ -46,7 +46,7 @@ export function ContactPanel({ hotel }) {
   }
 
   return (
-    <FadeIn id="contact" as="section" className="border-t border-mist bg-white">
+    <FadeIn id="contact" as="section" className="relative z-10 border-t border-mist bg-[#f7f7f7]">
       <div className="container-page grid gap-8 py-12 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
         <div>
           <p className="eyebrow">Feedback and contact</p>
@@ -63,7 +63,7 @@ export function ContactPanel({ hotel }) {
           ) : null}
         </div>
 
-        <form onSubmit={submit} className="grid gap-4 rounded-lg border border-mist bg-bone/60 p-4 shadow-soft md:grid-cols-2">
+        <form onSubmit={submit} className="grid gap-4 rounded-lg border border-stone-200 bg-white p-4 shadow-panel md:grid-cols-2">
           <Field label="Name"><input className="input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required /></Field>
           <Field label="Email"><input className="input" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></Field>
           <Field label="Phone"><input className="input" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></Field>

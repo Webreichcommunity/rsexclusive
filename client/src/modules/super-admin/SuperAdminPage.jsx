@@ -21,6 +21,7 @@ import { StatusPill } from '../../components/ui/StatusPill.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { uploadImageToCloudinary } from '../../services/cloudinaryUpload.js'
+import { buildHotelUrl, formatHotelHost } from '../tenant/resolveTenant.js'
 
 const emptyHotel = {
   name: '',
@@ -289,7 +290,7 @@ function HotelList({ hotels, onDetail, onEdit, onStatus, onDelete, saving }) {
               <img src={hotel.branding?.logoUrl || hotel.hero_image_url || 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=300&q=80'} alt={hotel.name} className="h-12 w-12 rounded-md object-cover" />
               <div className="min-w-0">
                 <p className="truncate text-2xl font-semibold">{hotel.name}</p>
-                <p className="truncate text-xs font-bold text-stone-500">{hotel.subdomain}.domain.com / {hotel.slug}</p>
+                <p className="truncate text-xs font-bold text-stone-500">{formatHotelHost(hotel)} / {hotel.slug}</p>
               </div>
             </div>
             <p className="text-sm font-semibold text-stone-600">{hotel.admins?.length || 0} assigned</p>
@@ -375,7 +376,7 @@ function HotelDetail({ hotel, loading, detail, hotels, adminForm, saving, onBack
         <div className="flex flex-wrap gap-2 p-4">
           <button className="btn-secondary" onClick={onBack}><ArrowLeft size={18} /> Portfolio</button>
           <button className="btn-secondary" onClick={onEdit}><Pencil size={18} /> Edit</button>
-          <a className="btn-secondary" href={`/?hotel=${hotel.subdomain}`} target="_blank" rel="noreferrer"><Eye size={18} /> Open hotel page</a>
+          <a className="btn-secondary" href={buildHotelUrl(hotel)} target="_blank" rel="noreferrer"><Eye size={18} /> Open hotel page</a>
           <button className="btn-secondary text-red-700" onClick={onDelete}><Trash2 size={18} /> Delete</button>
         </div>
       </div>

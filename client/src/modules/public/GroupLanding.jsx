@@ -6,6 +6,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { Seo } from '../../components/seo/Seo.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
+import { buildHotelUrl } from '../tenant/resolveTenant.js'
 
 const fallbackHotelImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1800&q=80'
 const groupHero = 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=2200&q=80'
@@ -100,7 +101,7 @@ export function GroupLanding() {
                     </div>
                     <div className="mt-8 flex flex-col gap-3 border-t border-stone-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
                       <span className="rounded-md bg-bone px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-amberline">Open for booking</span>
-                      <a href={`/?hotel=${hotel.subdomain}`} className="btn-primary">
+                      <a href={buildHotelUrl(hotel)} className="btn-primary">
                         Enter hotel <ArrowUpRight size={17} />
                       </a>
                     </div>
@@ -137,8 +138,8 @@ function HotelBannerCarousel({ hotels, activeIndex, setActiveIndex }) {
           <h3 className="mt-4 text-4xl font-bold leading-tight md:text-6xl">{hotel.name}</h3>
           <p className="mt-5 max-w-2xl text-sm leading-7 text-white/82">{hotel.description}</p>
           <div className="mt-6 flex flex-wrap gap-3">
-            <a href={`/?hotel=${hotel.subdomain}`} className="btn-dark">Enter this hotel <ArrowUpRight size={17} /></a>
-            <a href={`/?hotel=${hotel.subdomain}#rooms`} className="btn-primary bg-amber-600 hover:bg-amber-700">View rooms</a>
+            <a href={buildHotelUrl(hotel)} className="btn-dark">Enter this hotel <ArrowUpRight size={17} /></a>
+            <a href={buildHotelUrl(hotel, '/#rooms')} className="btn-primary bg-amber-600 hover:bg-amber-700">View rooms</a>
           </div>
         </div>
         <div className="self-end rounded-lg border border-white/25 bg-white/12 p-4 backdrop-blur-xl">

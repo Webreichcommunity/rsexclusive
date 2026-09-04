@@ -8,6 +8,7 @@ import { generateBookingPdf } from './pdfService.js'
 import { sendBookingConfirmation } from './emailService.js'
 
 const bookingRef = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 10)
+const LOYALTY_POINT_VALUE = 100
 
 async function ensureCustomer(db, hotelId, user) {
   if (!user) return null
@@ -56,6 +57,18 @@ export function calculatePaymentPlan(total, paymentMode = 'full', advancePercent
   }
 }
 
+export function calculateLoyaltyRedemption(requestedPoints, availablePoints, eligibleSubtotal, pointValue = LOYALTY_POINT_VALUE) {
+  const requested = Math.max(0, Math.floor(Number(requestedPoints || 0)))
+  const available = Math.max(0, Math.floor(Number(availablePoints || 0)))
+  const redeemableByTotal = Math.max(0, Math.floor(Math.max(0, Number(eligibleSubtotal || 0) - 1) / pointValue))
+  const points = Math.min(requested, available, redeemableByTotal)
+  return {
+    points,
+    amount: Math.round((points * pointValue + Number.EPSILON) * 100) / 100,
+    pointValue,
+  }
+}
+
 async function findApplicableOffer(db, hotelId, userId, offerId) {
   if (!offerId) return null
   const { rows } = await db.query(
@@ -80,6 +93,63 @@ async function findApplicableOffer(db, hotelId, userId, offerId) {
   )
   if (!rows[0]) throw conflict('This offer is not available for this booking.', 'offer_unavailable')
   return rows[0]
+}
+
+async function findSelectedAmenities(db, hotelId, selectedAmenityIds = []) {
+  const ids = [...new Set((selectedAmenityIds || []).filter(Boolean))]
+  if (!ids.length) return []
+
+  const { rows } = await db.query(
+    `SELECT id, name, description, price, icon
+     FROM hotel_amenities
+     WHERE hotel_id = $1
+       AND active = true
+       AND id = ANY($2::uuid[])
+     ORDER BY array_position($2::uuid[], id)`,
+    [hotelId, ids],
+  )
+
+  if (rows.length !== ids.length) {
+    throw conflict('One or more selected amenities are no longer available.', 'amenity_unavailable')
+  }
+
+  return rows.map((amenity) => ({
+    id: amenity.id,
+    name: amenity.name,
+    description: amenity.description || '',
+    price: Number(amenity.price || 0),
+    icon: amenity.icon || 'sparkles',
+  }))
+}
+
+async function reserveLoyaltyRedemption(db, hotelId, userId, bookingId, requestedPoints, eligibleSubtotal) {
+  if (!requestedPoints || !userId) return { points: 0, amount: 0, pointValue: LOYALTY_POINT_VALUE }
+
+  const { rows } = await db.query(
+    `SELECT id, points_balance
+     FROM loyalty_accounts
+     WHERE hotel_id = $1 AND user_id = $2 AND scope = 'hotel'
+     FOR UPDATE`,
+    [hotelId, userId],
+  )
+  const account = rows[0]
+  const redemption = calculateLoyaltyRedemption(requestedPoints, account?.points_balance || 0, eligibleSubtotal)
+  if (!redemption.points) return redemption
+
+  await db.query(
+    `UPDATE loyalty_accounts
+     SET points_balance = points_balance - $1,
+         updated_at = now()
+     WHERE id = $2`,
+    [redemption.points, account.id],
+  )
+  await db.query(
+    `INSERT INTO loyalty_transactions (loyalty_account_id, booking_id, points, reason)
+     VALUES ($1, $2, $3, $4)`,
+    [account.id, bookingId, -redemption.points, 'booking_redemption_hold'],
+  )
+
+  return { ...redemption, accountId: account.id }
 }
 
 export async function createBookingHold({ hotel, user, payload }) {
@@ -119,15 +189,23 @@ export async function createBookingHold({ hotel, user, payload }) {
     }
 
     const roomSubtotal = lockedRows.reduce((sum, row) => sum + Number(row.price) * roomsCount, 0)
+    const selectedAmenities = await findSelectedAmenities(db, hotel.id, payload.selectedAmenityIds)
+    const amenitySubtotal = selectedAmenities.reduce((sum, amenity) => sum + Number(amenity.price || 0) * roomsCount, 0)
+    const grossSubtotal = Math.round((roomSubtotal + amenitySubtotal + Number.EPSILON) * 100) / 100
     const appliedOffer = await findApplicableOffer(db, hotel.id, user?.id || null, payload.offerId)
-    const discountAmount = calculateOfferDiscount(appliedOffer, roomSubtotal)
-    const payableSubtotal = Math.max(0, roomSubtotal - discountAmount)
-    const amounts = calculateBookingAmounts(payableSubtotal, hotel.tax_rate)
-    const paymentPlan = calculatePaymentPlan(amounts.total, payload.paymentMode)
+    const discountAmount = calculateOfferDiscount(appliedOffer, grossSubtotal)
+    const afterOfferSubtotal = Math.max(0, Math.round((grossSubtotal - discountAmount + Number.EPSILON) * 100) / 100)
     const customerId = await ensureCustomer(db, hotel.id, user)
     const reference = `RS-${bookingRef()}`
     const bookingMetadata = {
-      paymentPlan,
+      pricing: {
+        roomSubtotal: Math.round((roomSubtotal + Number.EPSILON) * 100) / 100,
+        amenitySubtotal: Math.round((amenitySubtotal + Number.EPSILON) * 100) / 100,
+        grossSubtotal,
+        offerDiscount: discountAmount,
+        loyaltyDiscount: 0,
+      },
+      selectedAmenities,
       ...(appliedOffer
         ? {
             offer: {
@@ -137,7 +215,7 @@ export async function createBookingHold({ hotel, user, payload }) {
               discountType: appliedOffer.discount_type,
               discountValue: Number(appliedOffer.discount_value || 0),
               discountAmount,
-              originalSubtotal: Math.round((roomSubtotal + Number.EPSILON) * 100) / 100,
+              originalSubtotal: grossSubtotal,
             },
           }
         : {}),
@@ -177,20 +255,70 @@ export async function createBookingHold({ hotel, user, payload }) {
         payload.guestName,
         payload.guestEmail,
         payload.guestPhone || null,
-        amounts.subtotal,
-        amounts.tax,
-        amounts.total,
+        afterOfferSubtotal,
+        0,
+        0,
         hotel.currency,
         JSON.stringify(bookingMetadata),
       ],
     )
 
-    const booking = bookingRows[0]
+    const initialBooking = bookingRows[0]
+    const loyaltyRedemption = await reserveLoyaltyRedemption(
+      db,
+      hotel.id,
+      user?.id || null,
+      initialBooking.id,
+      payload.redeemPoints,
+      afterOfferSubtotal,
+    )
+    const taxableSubtotal = Math.max(0, Math.round((afterOfferSubtotal - loyaltyRedemption.amount + Number.EPSILON) * 100) / 100)
+    const amounts = calculateBookingAmounts(taxableSubtotal, hotel.tax_rate)
+    const paymentPlan = calculatePaymentPlan(amounts.total, payload.paymentMode)
+    const finalMetadata = {
+      ...bookingMetadata,
+      paymentPlan,
+      pricing: {
+        ...bookingMetadata.pricing,
+        taxableSubtotal: amounts.subtotal,
+        tax: amounts.tax,
+        total: amounts.total,
+        loyaltyDiscount: loyaltyRedemption.amount,
+      },
+      ...(loyaltyRedemption.points
+        ? {
+            loyaltyRedemption: {
+              points: loyaltyRedemption.points,
+              amount: loyaltyRedemption.amount,
+              pointValue: loyaltyRedemption.pointValue,
+              accountId: loyaltyRedemption.accountId,
+            },
+          }
+        : {}),
+    }
+    const { rows: finalBookingRows } = await db.query(
+      `UPDATE bookings
+       SET subtotal_amount = $1,
+           tax_amount = $2,
+           total_amount = $3,
+           metadata = $4::jsonb
+       WHERE id = $5
+       RETURNING *`,
+      [amounts.subtotal, amounts.tax, amounts.total, JSON.stringify(finalMetadata), initialBooking.id],
+    )
+    const booking = finalBookingRows[0]
     const order = await createRazorpayOrder({
       amount: paymentPlan.paidAmount,
       currency: booking.currency,
       receipt: booking.booking_reference,
-      notes: { bookingId: booking.id, hotelId: hotel.id, paymentMode: paymentPlan.mode, balanceDue: paymentPlan.balanceDue },
+      notes: {
+        bookingId: booking.id,
+        hotelId: hotel.id,
+        paymentMode: paymentPlan.mode,
+        balanceDue: paymentPlan.balanceDue,
+        amenities: selectedAmenities.map((amenity) => amenity.name).join(', '),
+        loyaltyRedeemed: loyaltyRedemption.points,
+      },
     })
 
     await db.query(
@@ -301,6 +429,21 @@ export async function releaseExpiredBookingHolds(db) {
   )
 
   for (const booking of rows) {
+    const redemption = booking.metadata?.loyaltyRedemption
+    if (redemption?.accountId && Number(redemption.points || 0) > 0) {
+      await db.query(
+        `UPDATE loyalty_accounts
+         SET points_balance = points_balance + $1,
+             updated_at = now()
+         WHERE id = $2`,
+        [redemption.points, redemption.accountId],
+      )
+      await db.query(
+        `INSERT INTO loyalty_transactions (loyalty_account_id, booking_id, points, reason)
+         VALUES ($1, $2, $3, $4)`,
+        [redemption.accountId, booking.id, redemption.points, 'booking_redemption_release'],
+      )
+    }
     await db.query(
       `UPDATE room_inventory
        SET reserved_rooms = GREATEST(reserved_rooms - $1, 0)

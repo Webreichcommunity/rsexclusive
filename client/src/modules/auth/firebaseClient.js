@@ -9,6 +9,7 @@ const configured = Boolean(firebaseConfig.apiKey && firebaseConfig.authDomain &&
 let currentUser = null
 let appInstance = null
 let authInstance = null
+let authReadyPromise = null
 
 async function loadFirebase() {
   if (!configured) return null
@@ -23,9 +24,14 @@ async function loadFirebase() {
 
 export async function getFirebaseToken() {
   const auth = await loadFirebase()
+  if (auth) await waitForAuthReady(auth)
   const user = currentUser || auth?.currentUser
   if (!auth || !user) return null
-  return user.getIdToken()
+  try {
+    return await user.getIdToken()
+  } catch {
+    return user.getIdToken(true)
+  }
 }
 
 export async function observeAuth(callback) {
@@ -125,6 +131,23 @@ export async function logout() {
   const auth = await loadFirebase()
   const { signOut } = await import('firebase/auth')
   if (auth) await signOut(auth)
+  currentUser = null
+}
+
+async function waitForAuthReady(auth) {
+  if (auth.currentUser) {
+    currentUser = auth.currentUser
+    return auth.currentUser
+  }
+  const { onAuthStateChanged } = await import('firebase/auth')
+  authReadyPromise = authReadyPromise || new Promise((resolve) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      currentUser = user
+      unsubscribe()
+      resolve(user)
+    })
+  })
+  return authReadyPromise
 }
 
 function toFirebaseLoginMessage(error) {

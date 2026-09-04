@@ -18,6 +18,8 @@ const bookingSchema = z.object({
   roomTypeId: z.string().uuid(),
   offerId: z.string().uuid().optional(),
   paymentMode: z.enum(['full', 'partial']).default('full'),
+  selectedAmenityIds: z.array(z.string().uuid()).default([]),
+  redeemPoints: z.coerce.number().int().min(0).default(0),
   checkIn: z.coerce.date(),
   checkOut: z.coerce.date(),
   roomsCount: z.coerce.number().int().positive().default(1),
@@ -25,7 +27,7 @@ const bookingSchema = z.object({
   children: z.coerce.number().int().min(0).default(0),
   guestName: z.string().min(2).max(120),
   guestEmail: z.string().email(),
-  guestPhone: z.string().min(7).max(24).optional(),
+  guestPhone: z.string().min(7).max(24),
 })
 
 const verifyPaymentSchema = z.object({
@@ -59,13 +61,22 @@ publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, async (req, res
   const cacheKey = `tenant:${req.hotel.id}:${req.user?.id || 'guest'}`
   const cached = publicCache.get(cacheKey)
   if (cached) return res.json(cached)
-  const [hotel, rooms, amenities, offers] = await Promise.all([
+  const [hotel, rooms, amenities, offers, loyaltyRows] = await Promise.all([
     getHotelProfile(req.hotel.id),
     listRoomsForHotel(req.hotel.id),
     listAmenitiesForHotel(req.hotel.id),
     listOffersForHotel(req.hotel.id, req.user?.id || null),
+    req.user
+      ? query(
+          `SELECT coalesce(points_balance, 0)::int AS points
+           FROM loyalty_accounts
+           WHERE hotel_id = $1 AND user_id = $2 AND scope = 'hotel'
+           LIMIT 1`,
+          [req.hotel.id, req.user.id],
+        )
+      : Promise.resolve({ rows: [] }),
   ])
-  res.json(publicCache.set(cacheKey, { hotel, rooms, amenities, offers }))
+  res.json(publicCache.set(cacheKey, { hotel, rooms, amenities, offers, loyaltyPoints: loyaltyRows.rows[0]?.points || 0 }))
 })
 
 publicRoutes.post('/auth/register', optionalTenant, validate(registerSchema), async (req, res) => {

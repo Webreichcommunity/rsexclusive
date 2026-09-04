@@ -80,7 +80,7 @@ const amenitySchema = z.object({
   name: z.string().min(2),
   description: z.string().max(300).optional(),
   price: z.coerce.number().nonnegative().default(0),
-  icon: z.string().max(40).optional(),
+  icon: z.string().max(500).optional(),
   active: z.coerce.boolean().default(true),
 })
 
@@ -145,7 +145,19 @@ adminRoutes.get('/dashboard', async (req, res) => {
      FROM offers WHERE hotel_id = $1`,
     [req.hotel.id],
   )
-  res.json({ metrics: { ...rows[0], rooms: roomRows[0]?.rooms || 0, live_offers: offerRows[0]?.live_offers || 0 }, arrivals })
+  res.json({
+    hotel: {
+      id: req.hotel.id,
+      name: req.hotel.name,
+      slug: req.hotel.slug,
+      subdomain: req.hotel.subdomain,
+      address: req.hotel.address,
+      branding: req.hotel.branding,
+      hero_image_url: req.hotel.hero_image_url,
+    },
+    metrics: { ...rows[0], rooms: roomRows[0]?.rooms || 0, live_offers: offerRows[0]?.live_offers || 0 },
+    arrivals,
+  })
 })
 
 adminRoutes.get('/bookings', async (req, res) => {

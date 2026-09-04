@@ -5,6 +5,7 @@ import { FadeIn } from '../../components/ui/Motion.jsx'
 import { loginWithEmail, loginWithGoogle, refreshFirebaseUser, registerWithEmail, resendEmailVerification, sendPasswordReset } from './firebaseClient.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { useAuth } from './authContext.js'
+import { navigateToHotelPath } from '../tenant/resolveTenant.js'
 
 const pendingProfileKey = 'rs-exclusive-pending-registration'
 
@@ -61,8 +62,7 @@ export function LoginPage() {
       return
     }
     if (user.role === 'hotel_admin') {
-      const hotelQuery = user.hotel?.subdomain ? `?hotel=${user.hotel.subdomain}` : ''
-      navigate(`/admin${hotelQuery}`, { replace: true })
+      navigateToHotelPath(navigate, user.hotel, '/admin', { replace: true })
       return
     }
     navigate(returnTo || '/account', { replace: true })

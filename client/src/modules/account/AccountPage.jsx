@@ -9,6 +9,7 @@ import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { useAppUser } from '../auth/useAppUser.js'
 import { logout } from '../auth/firebaseClient.js'
+import { buildHotelUrl } from '../tenant/resolveTenant.js'
 
 const profileOptions = [
   { avatar: 'avatar-male', gender: 'male', label: 'Male', Icon: UserRound },
@@ -68,8 +69,7 @@ export function AccountPage() {
 
   if (appUser.data?.user?.role === 'super_admin') return <Navigate to="/super-admin" replace />
   if (appUser.data?.user?.role === 'hotel_admin') {
-    const hotelQuery = appUser.data.user.hotel?.subdomain ? `?hotel=${appUser.data.user.hotel.subdomain}` : ''
-    return <Navigate to={`/admin${hotelQuery}`} replace />
+    return <RedirectToHotelAdmin hotel={appUser.data.user.hotel} />
   }
 
   return (
@@ -187,6 +187,14 @@ function Avatar({ id, gender, small }) {
   const option = profileOptions.find((item) => item.avatar === id || item.gender === gender) || profileOptions[0]
   const Icon = option.Icon
   return <span className={`grid ${small ? 'h-8 w-8' : 'h-14 w-14'} place-items-center rounded-full bg-gradient-to-br from-amberline to-wine text-white shadow-soft`}><Icon size={small ? 16 : 24} /></span>
+}
+
+function RedirectToHotelAdmin({ hotel }) {
+  useEffect(() => {
+    window.location.replace(buildHotelUrl(hotel, '/admin'))
+  }, [hotel])
+
+  return <LoadingState label="Opening admin dashboard" />
 }
 
 function Field({ label, children }) {

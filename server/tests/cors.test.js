@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { isAllowedCorsOrigin } from '../src/config/cors.js'
+import { isAllowedCorsOrigin, isPrimaryDomainOrigin } from '../src/config/cors.js'
 
 test('CORS allows configured localhost origins', () => {
   assert.equal(isAllowedCorsOrigin('http://localhost:5173'), true)
@@ -9,6 +9,16 @@ test('CORS allows configured localhost origins', () => {
 
 test('CORS allows local tenant subdomains during development', () => {
   assert.equal(isAllowedCorsOrigin('http://shriyash.localhost:5173'), true)
+})
+
+test('CORS allows configured primary-domain tenant subdomains', () => {
+  assert.equal(isPrimaryDomainOrigin('https://hotel-ranjeet.example.com', 'example.com'), true)
+  assert.equal(isPrimaryDomainOrigin('https://www.example.com', 'example.com'), true)
+})
+
+test('CORS rejects lookalike primary-domain origins', () => {
+  assert.equal(isPrimaryDomainOrigin('https://hotel-ranjeet.example.com.attacker.test', 'example.com'), false)
+  assert.equal(isPrimaryDomainOrigin('https://badexample.com', 'example.com'), false)
 })
 
 test('CORS allows private LAN origins during local development', () => {

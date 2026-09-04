@@ -17,9 +17,24 @@ function isLocalDevelopmentOrigin(origin) {
   }
 }
 
+export function isPrimaryDomainOrigin(origin, primaryDomain = env.primaryDomain) {
+  const primary = String(primaryDomain || '').toLowerCase()
+  if (!primary || localHostnames.has(primary)) return false
+
+  try {
+    const url = new URL(origin)
+    if (!['http:', 'https:'].includes(url.protocol)) return false
+    const hostname = url.hostname.toLowerCase()
+    return hostname === primary || hostname === `www.${primary}` || hostname.endsWith(`.${primary}`)
+  } catch {
+    return false
+  }
+}
+
 export function isAllowedCorsOrigin(origin) {
   if (!origin) return true
   if (env.clientOrigins.includes(origin)) return true
+  if (isPrimaryDomainOrigin(origin)) return true
   return isLocalDevelopmentOrigin(origin)
 }
 

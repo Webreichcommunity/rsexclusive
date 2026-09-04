@@ -7,11 +7,17 @@ import { useAsync } from '../../hooks/useAsync.js'
 import { useAuth } from '../../modules/auth/authContext.js'
 import { apiFetch } from '../../services/apiClient.js'
 
+const fallbackHomeMediaImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1800&q=80'
+
 export function AppShell({ children, mode }) {
   const [open, setOpen] = useState(false)
   const location = useLocation()
   const { isAuthenticated, firebaseUser } = useAuth()
-  const tenant = useAsync(() => (mode.isTenant ? apiFetch('/tenant') : Promise.resolve({ hotel: null })), mode.isTenant ? `tenant:${mode.key}:${firebaseUser?.uid || 'guest'}:${firebaseUser?.emailVerified ? 'verified' : 'unverified'}` : 'group')
+  const isConsoleRoute = location.pathname.startsWith('/admin') || location.pathname.startsWith('/super-admin')
+  const tenant = useAsync(
+    () => (mode.isTenant && !isConsoleRoute ? apiFetch('/tenant') : Promise.resolve({ hotel: null, offers: [] })),
+    mode.isTenant && !isConsoleRoute ? `tenant:${mode.key}:${firebaseUser?.uid || 'guest'}:${firebaseUser?.emailVerified ? 'verified' : 'unverified'}` : 'group',
+  )
   const hotel = tenant.data?.hotel
   const offers = tenant.data?.offers || []
   const brandName = hotel?.branding?.logoText || hotel?.name || 'R.S. Exclusive'
@@ -19,13 +25,18 @@ export function AppShell({ children, mode }) {
   const accountLabel = isAuthenticated ? firstName(firebaseUser?.displayName || firebaseUser?.email || 'Account') : 'Login / Join'
   const accountPath = isAuthenticated ? '/account' : tenantPath('/login?mode=register', mode)
   const accountTitle = isAuthenticated ? firebaseUser?.email || 'Account' : 'Login or join'
+  const isTenantHome = mode.isTenant && location.pathname === '/'
+  const showOfferTicker = mode.isTenant && offers.length && !isConsoleRoute
+  const headerClass = isTenantHome
+    ? 'sticky top-0 z-40 border-b border-transparent bg-transparent text-white'
+    : 'sticky top-0 z-40 border-b border-white/10 bg-[#070707] text-white shadow-[0_18px_42px_rgba(0,0,0,0.42)]'
 
   const nav = mode.isTenant
     ? [
         ['Hotel', tenantPath('/#hotel', mode)],
-        ['Rooms', tenantPath('/book', mode)],
+        ['Offers', tenantPath('/#offers', mode)],
+        ['Rooms', tenantPath('/#rooms', mode)],
         ['Experience', tenantPath('/#experience', mode)],
-        ...(offers.length ? [['Offers', tenantPath('/#offers', mode)]] : []),
       ]
     : [
         ['Properties', '/#properties'],
@@ -50,19 +61,30 @@ export function AppShell({ children, mode }) {
     }
   }, [open])
 
+  if (isConsoleRoute) {
+    return <div className="min-h-screen bg-steel text-charcoal">{children}</div>
+  }
+
   return (
-    <div className="min-h-screen bg-ivory text-charcoal">
-      <header className="sticky top-0 z-40 border-b border-white/10 bg-gray-900 text-white shadow-sm">
+    <div className="relative min-h-screen bg-ivory text-charcoal">
+      {isTenantHome ? <TenantMediaBackdrop hotel={hotel} full /> : null}
+      {isTenantHome ? (
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none fixed inset-x-0 top-0 z-30 bg-[linear-gradient(180deg,rgba(0,0,0,0.98)_0%,rgba(0,0,0,0.90)_42%,rgba(0,0,0,0.68)_66%,rgba(0,0,0,0.32)_84%,rgba(0,0,0,0)_100%)] ${showOfferTicker ? 'h-[176px]' : 'h-[112px]'}`}
+        />
+      ) : null}
+      <header className={headerClass}>
         <div className="container-page flex min-h-[72px] items-center justify-between gap-4">
           <Link to={tenantPath('/', mode)} className="group flex min-w-0 items-center gap-3">
-            <span className={`grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-md text-base font-bold transition ${hotel?.branding?.logoUrl ? 'bg-white/5' : 'bg-white text-gray-900 group-hover:bg-amberline group-hover:text-white'}`}>
+            <span className={`grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-md text-base font-bold transition ${hotel?.branding?.logoUrl ? 'bg-transparent' : 'bg-white text-gray-900 group-hover:bg-amberline group-hover:text-white'}`}>
               {hotel?.branding?.logoUrl ? (
                 <img src={hotel.branding.logoUrl} alt={`${brandName} logo`} className="h-full w-full object-contain" />
               ) : (
                 initials(brandName)
               )}
             </span>
-            <span className="min-w-0 leading-tight">
+            <span className="min-w-0 leading-tight [text-shadow:0_3px_16px_rgba(0,0,0,0.78)]">
               <span className="block truncate text-lg font-bold text-white">{brandName}</span>
               <span className="block truncate text-[0.68rem] font-bold uppercase tracking-[0.12em] text-white/60">{subline}</span>
             </span>
@@ -70,7 +92,7 @@ export function AppShell({ children, mode }) {
 
           <nav className="hidden items-center gap-1 lg:flex">
             {nav.map(([label, to]) => (
-              <Link key={`${label}-${to}`} to={to} className="rounded-md px-3 py-2 text-sm font-bold text-white/72 transition hover:-translate-y-0.5 hover:bg-white/10 hover:text-white">
+              <Link key={`${label}-${to}`} to={to} className="rounded-md px-3 py-2 text-sm font-bold text-white/78 [text-shadow:0_2px_14px_rgba(0,0,0,0.72)] transition hover:-translate-y-0.5 hover:bg-white/10 hover:text-white">
                 {label}
               </Link>
             ))}
@@ -108,7 +130,11 @@ export function AppShell({ children, mode }) {
               </Link>
             ) : null}
             <button
-              className="grid h-11 w-11 place-items-center rounded-md border border-white/15 bg-white text-gray-900 shadow-sm transition hover:-translate-y-0.5 hover:bg-amberline hover:text-white hover:shadow-card"
+              className={`grid h-11 w-11 place-items-center rounded-md border shadow-sm transition hover:-translate-y-0.5 hover:shadow-card ${
+                isTenantHome
+                  ? 'border-white/20 bg-white/10 text-white backdrop-blur-md hover:bg-white/18'
+                  : 'border-white/15 bg-white text-gray-900 hover:bg-amberline hover:text-white'
+              }`}
               type="button"
               onClick={() => setOpen((value) => !value)}
               aria-label={open ? 'Close menu' : 'Open menu'}
@@ -139,7 +165,7 @@ export function AppShell({ children, mode }) {
               >
                 <div className="flex min-h-[72px] items-center justify-between border-b border-mist px-4">
                   <Link to={tenantPath('/', mode)} onClick={() => setOpen(false)} className="flex min-w-0 items-center gap-3">
-                    <span className={`grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-md text-sm font-bold ${hotel?.branding?.logoUrl ? 'bg-white' : 'bg-charcoal text-white'}`}>
+                    <span className={`grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-md text-sm font-bold ${hotel?.branding?.logoUrl ? 'bg-transparent' : 'bg-charcoal text-white'}`}>
                       {hotel?.branding?.logoUrl ? <img src={hotel.branding.logoUrl} alt={`${brandName} logo`} className="h-full w-full object-contain" /> : initials(brandName)}
                     </span>
                     <span className="min-w-0 leading-tight">
@@ -173,13 +199,13 @@ export function AppShell({ children, mode }) {
         </AnimatePresence>
       </header>
 
-      {mode.isTenant && offers.length && !location.pathname.startsWith('/admin') ? <OfferTicker offers={offers} mode={mode} /> : null}
+      {showOfferTicker && !open ? <OfferTicker offers={offers} mode={mode} floating={isTenantHome} /> : null}
 
-      {children}
+      <div className={isTenantHome ? 'relative z-10' : undefined}>{children}</div>
 
       {mode.isTenant && hotel && !location.pathname.startsWith('/admin') ? <ContactPanel hotel={hotel} /> : null}
 
-      <footer className="bg-charcoal py-12 text-white md:py-16">
+      <footer className="relative z-10 bg-charcoal py-12 text-white md:py-16">
         <div className="container-page grid gap-10 lg:grid-cols-[1.2fr_0.8fr_0.8fr]">
           <div>
             <p className="text-4xl font-semibold">{brandName}</p>
@@ -221,17 +247,54 @@ export function AppShell({ children, mode }) {
   )
 }
 
-function OfferTicker({ offers, mode }) {
+function TenantMediaBackdrop({ hotel, full = false }) {
+  const image = hotel?.hero_image_url || fallbackHomeMediaImage
+  const media = getBackgroundVideoSource(hotel?.branding?.youtubeEmbedUrl)
+  const frameClass = full
+    ? 'pointer-events-none fixed inset-0 z-0 overflow-hidden bg-charcoal'
+    : 'pointer-events-none fixed inset-x-0 top-0 z-0 h-[136px] overflow-hidden bg-charcoal'
+
   return (
-    <div className="sticky top-[72px] z-30 border-b border-amberline/10 bg-[linear-gradient(120deg,rgba(255,255,255,0.98),rgba(250,247,241,0.94),rgba(127,29,29,0.08))] text-charcoal shadow-sm backdrop-blur-xl">
-      <Link to={tenantPath('/#offers', mode)} className="container-page flex min-h-11 items-center gap-4 overflow-hidden text-sm font-extrabold text-charcoal">
+    <div aria-hidden="true" className={frameClass}>
+      {media?.type === 'youtube' ? (
+        <iframe
+          className="absolute left-1/2 top-1/2 min-w-full border-0"
+          style={{
+            width: full ? 'max(100vw, 177.78svh)' : 'max(100vw, 242px)',
+            height: full ? 'max(calc(100svh + 176px), calc(56.25vw + 176px))' : 'max(312px, calc(56.25vw + 176px))',
+            transform: 'translate(-50%, -50%) scale(1.22)',
+            transformOrigin: 'center',
+          }}
+          src={media.src}
+          title=""
+          allow="autoplay; encrypted-media; picture-in-picture"
+          tabIndex={-1}
+        />
+      ) : null}
+      {media?.type === 'file' ? <video className="absolute inset-0 h-full w-full object-cover object-top" src={media.src} poster={image} autoPlay muted loop playsInline /> : null}
+      {!media ? <img className="absolute inset-0 h-full w-full object-cover object-top" src={image} alt="" /> : null}
+    </div>
+  )
+}
+
+function OfferTicker({ offers, mode, floating = false }) {
+  const tickerClass = floating
+    ? 'fixed inset-x-0 top-[72px] z-40 bg-[#070707]/78 text-white'
+    : 'sticky top-[72px] z-30 border-b border-white/10 bg-[linear-gradient(180deg,#101010_0%,#070707_100%)] text-white shadow-[0_14px_34px_rgba(0,0,0,0.36)]'
+
+  return (
+    <div className={tickerClass}>
+      <Link to={tenantPath('/#offers', mode)} className="container-page flex min-h-10 items-center gap-2 overflow-hidden text-xs font-extrabold text-white [text-shadow:0_2px_14px_rgba(0,0,0,0.76)] sm:min-h-11 sm:text-sm">
+        <span className="hidden shrink-0 rounded-full border border-white/18 bg-white/10 px-3 py-1 text-[0.64rem] uppercase tracking-[0.16em] text-amber-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] sm:inline-flex">
+          Offers
+        </span>
         <span className="min-w-0 flex-1 overflow-hidden">
-          <span className="offer-marquee inline-flex gap-7 whitespace-nowrap">
+          <span className="offer-marquee inline-flex gap-10 whitespace-nowrap">
             {[...offers, ...offers].map((offer, index) => (
               <span key={`${offer.id || offer.title}-${index}`} className="inline-flex items-center gap-2">
-                <Sparkles size={15} className="text-amberline" />
+                <Sparkles size={15} className="text-amber-200" />
                 <span>{offer.title}</span>
-                <span className="font-semibold text-stone-600">{formatOfferValue(offer)}</span>
+                <span className="font-semibold text-white/68">{formatOfferValue(offer)}</span>
               </span>
             ))}
           </span>
@@ -270,4 +333,48 @@ function tenantPath(path, mode) {
   params.set('hotel', mode.key)
   const query = params.toString()
   return `${base}${query ? `?${query}` : ''}${hash ? `#${hash}` : ''}`
+}
+
+function getBackgroundVideoSource(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+
+  const youtubeId = getYouTubeVideoId(raw)
+  if (youtubeId) {
+    const params = new URLSearchParams({
+      autoplay: '1',
+      mute: '1',
+      controls: '0',
+      loop: '1',
+      playlist: youtubeId,
+      start: '0',
+      playsinline: '1',
+      rel: '0',
+      showinfo: '0',
+      autohide: '1',
+      modestbranding: '1',
+      iv_load_policy: '3',
+      disablekb: '1',
+      fs: '0',
+    })
+    return { type: 'youtube', src: `https://www.youtube-nocookie.com/embed/${youtubeId}?${params.toString()}` }
+  }
+
+  if (/\.(mp4|webm|ogg)(\?.*)?$/i.test(raw)) return { type: 'file', src: raw }
+  return null
+}
+
+function getYouTubeVideoId(value) {
+  try {
+    const url = new URL(value)
+    if (url.hostname.includes('youtube.com')) {
+      if (url.pathname.startsWith('/embed/')) return url.pathname.split('/').filter(Boolean)[1] || ''
+      if (url.pathname.startsWith('/shorts/')) return url.pathname.split('/').filter(Boolean)[1] || ''
+      return url.searchParams.get('v') || ''
+    }
+    if (url.hostname.includes('youtu.be')) return url.pathname.split('/').filter(Boolean)[0] || ''
+  } catch {
+    return ''
+  }
+  return ''
 }

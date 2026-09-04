@@ -5,7 +5,7 @@ This platform is one codebase, one Express API, and one PostgreSQL database serv
 ## Tenancy
 
 - `hotels.id` is the tenant key for hotel-specific data.
-- Public tenant resolution uses subdomain first, custom domain second, and `?hotel=hotel-subdomain` as the local development fallback.
+- Public tenant resolution uses subdomain first, custom domain second, and `?hotel=hotel-subdomain` only as a compatibility fallback.
 - React may send a tenant hint, but authorization never trusts a frontend `hotel_id`.
 - Hotel admin authorization is derived from `hotel_admins` joined to the authenticated PostgreSQL `users` row.
 - Super admins operate across tenants through separate protected routes and backend role checks.
