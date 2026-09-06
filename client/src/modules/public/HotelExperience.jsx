@@ -23,7 +23,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { Seo } from '../../components/seo/Seo.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
-import { resolveTenantFromLocation } from '../tenant/resolveTenant.js'
+import { buildTenantPath, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
 
 const fallbackHotelImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1800&q=80'
 const fallbackRoomImage = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1400&q=80'
@@ -510,13 +510,7 @@ function Stepper({ value, min, onChange }) {
 
 function withTenantQuery(path) {
   const tenant = resolveTenantFromLocation()
-  if (!tenant.isTenant || !tenant.key || !['query', 'local-storage'].includes(tenant.source)) return path
-  const [baseWithSearch, hash = ''] = path.split('#')
-  const [base, search = ''] = baseWithSearch.split('?')
-  const params = new URLSearchParams(search)
-  params.set('hotel', tenant.key)
-  const query = params.toString()
-  return `${base}${query ? `?${query}` : ''}${hash ? `#${hash}` : ''}`
+  return buildTenantPath(path, tenant)
 }
 
 function TenantError({ error }) {

@@ -122,34 +122,44 @@ async function findSelectedAmenities(db, hotelId, selectedAmenityIds = []) {
   }))
 }
 
-async function reserveLoyaltyRedemption(db, hotelId, userId, bookingId, requestedPoints, eligibleSubtotal) {
+async function reserveLoyaltyRedemption(db, _hotelId, userId, bookingId, requestedPoints, eligibleSubtotal) {
   if (!requestedPoints || !userId) return { points: 0, amount: 0, pointValue: LOYALTY_POINT_VALUE }
 
   const { rows } = await db.query(
-    `SELECT id, points_balance
+    `SELECT id, points_balance, scope, hotel_id
      FROM loyalty_accounts
-     WHERE hotel_id = $1 AND user_id = $2 AND scope = 'hotel'
+     WHERE user_id = $1 AND points_balance > 0
+     ORDER BY CASE WHEN scope = 'group' THEN 0 ELSE 1 END, updated_at ASC
      FOR UPDATE`,
-    [hotelId, userId],
+    [userId],
   )
-  const account = rows[0]
-  const redemption = calculateLoyaltyRedemption(requestedPoints, account?.points_balance || 0, eligibleSubtotal)
+  const availablePoints = rows.reduce((sum, account) => sum + Number(account.points_balance || 0), 0)
+  const redemption = calculateLoyaltyRedemption(requestedPoints, availablePoints, eligibleSubtotal)
   if (!redemption.points) return redemption
 
-  await db.query(
-    `UPDATE loyalty_accounts
-     SET points_balance = points_balance - $1,
-         updated_at = now()
-     WHERE id = $2`,
-    [redemption.points, account.id],
-  )
-  await db.query(
-    `INSERT INTO loyalty_transactions (loyalty_account_id, booking_id, points, reason)
-     VALUES ($1, $2, $3, $4)`,
-    [account.id, bookingId, -redemption.points, 'booking_redemption_hold'],
-  )
+  let remaining = redemption.points
+  const accounts = []
+  for (const account of rows) {
+    if (remaining <= 0) break
+    const points = Math.min(remaining, Number(account.points_balance || 0))
+    if (!points) continue
+    remaining -= points
+    accounts.push({ id: account.id, points })
+    await db.query(
+      `UPDATE loyalty_accounts
+       SET points_balance = points_balance - $1,
+           updated_at = now()
+       WHERE id = $2`,
+      [points, account.id],
+    )
+    await db.query(
+      `INSERT INTO loyalty_transactions (loyalty_account_id, booking_id, points, reason)
+       VALUES ($1, $2, $3, $4)`,
+      [account.id, bookingId, -points, 'group_booking_redemption_hold'],
+    )
+  }
 
-  return { ...redemption, accountId: account.id }
+  return { ...redemption, accounts, accountId: accounts[0]?.id }
 }
 
 export async function createBookingHold({ hotel, user, payload }) {
@@ -292,6 +302,7 @@ export async function createBookingHold({ hotel, user, payload }) {
               amount: loyaltyRedemption.amount,
               pointValue: loyaltyRedemption.pointValue,
               accountId: loyaltyRedemption.accountId,
+              accounts: loyaltyRedemption.accounts || [],
             },
           }
         : {}),
@@ -359,41 +370,61 @@ export async function confirmBookingPayment({ orderId, paymentId, signature, tru
     )
     const booking = rows[0]
     if (!booking) throw notFound('Booking not found')
-    if (booking.status === 'confirmed') return booking
     if (booking.status !== 'payment_pending') {
-      throw conflict('Booking cannot be confirmed from its current status.', 'invalid_booking_status')
+      if (booking.status !== 'confirmed') {
+        throw conflict('Booking cannot be confirmed from its current status.', 'invalid_booking_status')
+      }
     }
 
-    await db.query(
-      `UPDATE payments
-       SET provider_payment_id = $1, provider_signature = $2, status = 'captured', updated_at = now()
-       WHERE provider_order_id = $3`,
-      [paymentId, signature, orderId],
-    )
-
-    const { rows: confirmedRows } = await db.query(
-      `UPDATE bookings
-       SET status = 'confirmed', confirmed_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [booking.id],
-    )
-    const confirmed = confirmedRows[0]
-    const earnedPoints = Math.floor(Number(confirmed.total_amount || 0) / 100)
-    if (confirmed.user_id && earnedPoints > 0) {
-      const { rows: accountRows } = await db.query(
-        `INSERT INTO loyalty_accounts (hotel_id, user_id, scope, points_balance)
-         VALUES ($1, $2, 'hotel', $3)
-         ON CONFLICT (hotel_id, user_id, scope) DO UPDATE SET
-           points_balance = loyalty_accounts.points_balance + EXCLUDED.points_balance,
-           updated_at = now()
-         RETURNING id`,
-        [confirmed.hotel_id, confirmed.user_id, earnedPoints],
+    let confirmed = booking
+    if (booking.status === 'payment_pending') {
+      await db.query(
+        `UPDATE payments
+         SET provider_payment_id = $1, provider_signature = $2, status = 'captured', updated_at = now()
+         WHERE provider_order_id = $3`,
+        [paymentId, signature, orderId],
       )
+
+      const { rows: confirmedRows } = await db.query(
+        `UPDATE bookings
+         SET status = 'confirmed', confirmed_at = now()
+         WHERE id = $1
+         RETURNING *`,
+        [booking.id],
+      )
+      confirmed = confirmedRows[0]
+    }
+
+    const earnedPoints = booking.status === 'payment_pending' ? Math.floor(Number(confirmed.total_amount || 0) / 100) : 0
+    if (confirmed.user_id && earnedPoints > 0) {
+      const { rows: existingGroupRows } = await db.query(
+        `SELECT id
+         FROM loyalty_accounts
+         WHERE user_id = $1 AND scope = 'group' AND hotel_id IS NULL
+         ORDER BY created_at ASC
+         LIMIT 1
+         FOR UPDATE`,
+        [confirmed.user_id],
+      )
+      const { rows: accountRows } = existingGroupRows[0]
+        ? await db.query(
+            `UPDATE loyalty_accounts
+             SET points_balance = points_balance + $1,
+                 updated_at = now()
+             WHERE id = $2
+             RETURNING id`,
+            [earnedPoints, existingGroupRows[0].id],
+          )
+        : await db.query(
+            `INSERT INTO loyalty_accounts (hotel_id, user_id, scope, points_balance)
+             VALUES (null, $1, 'group', $2)
+             RETURNING id`,
+            [confirmed.user_id, earnedPoints],
+          )
       await db.query(
         `INSERT INTO loyalty_transactions (loyalty_account_id, booking_id, points, reason)
          VALUES ($1, $2, $3, $4)`,
-        [accountRows[0].id, confirmed.id, earnedPoints, 'booking_reward'],
+        [accountRows[0].id, confirmed.id, earnedPoints, 'group_booking_reward'],
       )
     }
 
@@ -405,15 +436,26 @@ export async function confirmBookingPayment({ orderId, paymentId, signature, tru
       [confirmed.hotel_id, confirmed.id, `INV-${confirmed.booking_reference}`],
     )
 
-    const { rows: hotelRows } = await db.query('SELECT * FROM hotels WHERE id = $1', [confirmed.hotel_id])
-    return { booking: confirmed, hotel: hotelRows[0], invoice: invoiceRows[0] }
+    const [{ rows: hotelRows }, { rows: roomRows }] = await Promise.all([
+      db.query('SELECT * FROM hotels WHERE id = $1', [confirmed.hotel_id]),
+      db.query(
+        `SELECT id, name, slug, description, occupancy_adults, occupancy_children,
+                base_price, offer_price, size_sqft, bed_type, amenities,
+                amenity_items, hero_image_url, gallery
+         FROM room_types
+         WHERE id = $1
+         LIMIT 1`,
+        [confirmed.room_type_id],
+      ),
+    ])
+    return { booking: { ...confirmed, room_type_name: roomRows[0]?.name }, hotel: hotelRows[0], room: roomRows[0], invoice: invoiceRows[0] }
   })
 
-  generateBookingPdf({ hotel: result.hotel, booking: result.booking, invoice: result.invoice })
+  generateBookingPdf({ hotel: result.hotel, room: result.room, booking: result.booking, invoice: result.invoice })
     .then(async (pdf) => {
       const invoice = { ...result.invoice, pdf_url: pdf.publicUrl }
       await query('UPDATE invoices SET pdf_url = $1 WHERE id = $2', [pdf.publicUrl, result.invoice.id])
-      await sendBookingConfirmation({ hotel: result.hotel, booking: result.booking, invoice, pdfPath: pdf.filePath })
+      await sendBookingConfirmation({ hotel: result.hotel, room: result.room, booking: result.booking, invoice, pdfPath: pdf.filePath })
     })
     .catch((error) => console.error({ message: 'Receipt workflow failed', bookingId: result.booking.id, error: error.message }))
 
@@ -430,18 +472,24 @@ export async function releaseExpiredBookingHolds(db) {
 
   for (const booking of rows) {
     const redemption = booking.metadata?.loyaltyRedemption
-    if (redemption?.accountId && Number(redemption.points || 0) > 0) {
+    const redemptionAccounts = Array.isArray(redemption?.accounts) && redemption.accounts.length
+      ? redemption.accounts
+      : redemption?.accountId && Number(redemption.points || 0) > 0
+        ? [{ id: redemption.accountId, points: redemption.points }]
+        : []
+    for (const account of redemptionAccounts) {
+      if (!account.id || Number(account.points || 0) <= 0) continue
       await db.query(
         `UPDATE loyalty_accounts
          SET points_balance = points_balance + $1,
-             updated_at = now()
+           updated_at = now()
          WHERE id = $2`,
-        [redemption.points, redemption.accountId],
+        [account.points, account.id],
       )
       await db.query(
         `INSERT INTO loyalty_transactions (loyalty_account_id, booking_id, points, reason)
          VALUES ($1, $2, $3, $4)`,
-        [redemption.accountId, booking.id, redemption.points, 'booking_redemption_release'],
+        [account.id, booking.id, account.points, 'group_booking_redemption_release'],
       )
     }
     await db.query(

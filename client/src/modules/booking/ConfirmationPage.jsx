@@ -31,7 +31,7 @@ export function ConfirmationPage() {
           <p className="mt-5 text-xs font-extrabold uppercase tracking-[0.22em] text-stone-400">Booking Confirmed</p>
           <h1 className="mt-3 text-5xl font-semibold leading-none md:text-6xl">Booking ID {bookingReference}</h1>
           <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-white/75">
-            Your payment was verified by the backend. A confirmation email and receipt workflow has started.
+            Your payment was verified. The hotel invoice PDF is generated and emailed automatically.
           </p>
         </div>
 

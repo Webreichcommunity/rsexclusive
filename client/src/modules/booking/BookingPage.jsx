@@ -8,7 +8,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { useAuth } from '../auth/authContext.js'
 import { apiFetch } from '../../services/apiClient.js'
-import { getSavedTenantKey, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
+import { buildTenantPath, getSavedTenantKey, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
 
 const fallbackRoomImage = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1400&q=80'
 
@@ -109,7 +109,7 @@ export function BookingPage() {
     if (roomTypeId) next.set('roomTypeId', roomTypeId)
     const tenant = resolveTenantFromLocation()
     const hotel = params.get('hotel') || (tenant.isTenant ? tenant.key : null) || getSavedTenantKey()
-    if (hotel) next.set('hotel', hotel)
+    if (hotel && ['query', 'local-storage'].includes(tenant.source)) next.set('hotel', hotel)
     if (extra.step) next.set('step', extra.step)
     const offerId = extra.offerId ?? selectedOfferId
     if (offerId) next.set('offerId', offerId)
@@ -275,7 +275,7 @@ export function BookingPage() {
     const next = syncUrl(form, room.id, { step: 'review' })
     if (!isAuthenticated) {
       const returnTo = encodeURIComponent(`${location.pathname}?${next.toString()}`)
-      navigate(`/login?returnTo=${returnTo}`)
+      navigate(buildTenantPath(`/login?returnTo=${returnTo}`, resolveTenantFromLocation()))
       return
     }
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -303,7 +303,7 @@ export function BookingPage() {
   function requireLogin() {
     const next = syncUrl(form, selectedRoomId)
     const returnTo = encodeURIComponent(`${location.pathname}?${next.toString()}`)
-    navigate(`/login?returnTo=${returnTo}`)
+    navigate(buildTenantPath(`/login?returnTo=${returnTo}`, resolveTenantFromLocation()))
   }
 
   async function proceedToPayment() {
@@ -362,7 +362,7 @@ export function BookingPage() {
             razorpaySignature: `dev_signature_${hold.booking.booking_reference}`,
           },
         })
-        navigate(`/confirmation/${confirmed.booking.booking_reference}`, { state: { booking: confirmed.booking } })
+        navigate(buildTenantPath(`/confirmation/${confirmed.booking.booking_reference}`, resolveTenantFromLocation()), { state: { booking: confirmed.booking } })
         return
       }
 
@@ -407,7 +407,7 @@ export function BookingPage() {
                 razorpaySignature: response.razorpay_signature,
               },
             })
-            navigate(`/confirmation/${confirmed.booking.booking_reference}`, { state: { booking: confirmed.booking } })
+            navigate(buildTenantPath(`/confirmation/${confirmed.booking.booking_reference}`, resolveTenantFromLocation()), { state: { booking: confirmed.booking } })
           } catch (err) {
             setStatus({ loading: false, error: '', paymentError: err.message })
           }
@@ -902,7 +902,7 @@ function BookingReviewPage({
                   ))}
                   <Line label="Stay subtotal" value={`Rs ${grossSubtotal.toLocaleString('en-IN')}`} />
                   {selectedOffer ? <Line label={selectedOffer.title} value={`- Rs ${offerDiscount.toLocaleString('en-IN')}`} /> : null}
-                  {redeemPoints ? <Line label={`${redeemPoints} loyalty point${redeemPoints === 1 ? '' : 's'}`} value={`- Rs ${loyaltyDiscount.toLocaleString('en-IN')}`} /> : null}
+                  {redeemPoints ? <Line label={`${redeemPoints} group loyalty point${redeemPoints === 1 ? '' : 's'}`} value={`- Rs ${loyaltyDiscount.toLocaleString('en-IN')}`} /> : null}
                   <Line label="Taxable subtotal" value={`Rs ${subtotal.toLocaleString('en-IN')}`} />
                   <Line label="Taxes" value={`Rs ${tax.toLocaleString('en-IN')}`} />
                 </div>
@@ -951,7 +951,7 @@ function BookingReviewPage({
               </div>
               <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3">
                 <p className="flex items-center gap-2 text-sm font-extrabold text-amber-900"><Gift size={17} /> Loyalty rewards</p>
-                <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">Every Rs 100 earns 1 point. This booking can earn {loyaltyPoints.toLocaleString('en-IN')} point{loyaltyPoints === 1 ? '' : 's'} after payment confirmation.</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">Every Rs 100 earns 1 group point. This booking can earn {loyaltyPoints.toLocaleString('en-IN')} point{loyaltyPoints === 1 ? '' : 's'} after payment confirmation, redeemable at any hotel.</p>
               </div>
 
               {isAuthenticated ? (
@@ -1007,8 +1007,8 @@ function LoyaltyRedeemControl({ availablePoints, maxRedeemablePoints, redeemPoin
     <div className="mt-4 rounded-lg border border-[#d8c7a5] bg-[#fff8ea] p-4 shadow-sm">
       <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
         <div>
-          <p className="flex items-center gap-2 text-sm font-extrabold text-charcoal"><Gift size={17} className="text-amberline" /> Redeem loyalty points</p>
-          <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">You have {Number(availablePoints || 0).toLocaleString('en-IN')} point{availablePoints === 1 ? '' : 's'}. 1 point = Rs 100.</p>
+          <p className="flex items-center gap-2 text-sm font-extrabold text-charcoal"><Gift size={17} className="text-amberline" /> Redeem group loyalty points</p>
+          <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">You have {Number(availablePoints || 0).toLocaleString('en-IN')} group point{availablePoints === 1 ? '' : 's'}. 1 point = Rs 100 and can be used at any hotel.</p>
         </div>
         {discount ? <span className="rounded-md bg-white px-3 py-2 text-sm font-black text-emerald-800">- Rs {discount.toLocaleString('en-IN')}</span> : null}
       </div>

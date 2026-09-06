@@ -62,7 +62,7 @@ export async function loginWithEmail(email, password) {
 
 function authActionSettings() {
   return {
-    url: `${window.location.origin}/login`,
+    url: `${window.location.origin}${window.location.pathname}${window.location.search}`,
     handleCodeInApp: false,
   }
 }

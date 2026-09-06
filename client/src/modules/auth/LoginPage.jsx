@@ -1,19 +1,33 @@
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { CheckCircle2, Loader2, LogIn, Mail, RotateCcw, ShieldCheck, Sparkles } from 'lucide-react'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { CheckCircle2, KeyRound, Loader2, LogIn, Mail, RotateCcw, UserPlus } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { FadeIn } from '../../components/ui/Motion.jsx'
-import { loginWithEmail, loginWithGoogle, refreshFirebaseUser, registerWithEmail, resendEmailVerification, sendPasswordReset } from './firebaseClient.js'
+import {
+  loginWithEmail,
+  loginWithGoogle,
+  refreshFirebaseUser,
+  registerWithEmail,
+  resendEmailVerification,
+  sendPasswordReset,
+} from './firebaseClient.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { useAuth } from './authContext.js'
-import { navigateToHotelPath } from '../tenant/resolveTenant.js'
+import { buildTenantPath, navigateToHotelPath, resolveTenantFromLocation, stripTenantFromPath } from '../tenant/resolveTenant.js'
 
 const pendingProfileKey = 'rs-exclusive-pending-registration'
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [params] = useSearchParams()
   const returnTo = params.get('returnTo')
-  const [mode, setMode] = useState(params.get('mode') === 'register' ? 'register' : 'login')
+  const consoleReturnTo = returnTo && (returnTo.startsWith('/admin') || returnTo.startsWith('/super-admin'))
+  const tenantMode = resolveTenantFromLocation()
+  const appPath = stripTenantFromPath(location.pathname, tenantMode)
+  const isAdminLogin = appPath.startsWith('/admin/login') || params.get('role') === 'admin' || Boolean(consoleReturnTo)
+  const requestedMode = params.get('mode')
+  const initialMode = isAdminLogin ? (requestedMode === 'forgot' ? 'forgot' : 'login') : requestedMode === 'register' ? 'register' : 'login'
+  const [mode, setMode] = useState(initialMode)
   const [form, setForm] = useState({ fullName: '', email: '', phone: '', password: '' })
   const [pendingProfile, setPendingProfile] = useState(null)
   const [error, setError] = useState('')
@@ -36,27 +50,8 @@ export function LoginPage() {
     return null
   }
 
-  async function finishVerifiedRegistration(user, profile = pendingProfile) {
-    const token = await user.getIdToken(true)
-    await apiFetch('/auth/register', {
-      method: 'POST',
-      authToken: token,
-      body: {
-        fullName: profile?.fullName || user.displayName || user.email,
-        phone: profile?.phone || undefined,
-      },
-    })
-    window.localStorage.removeItem(pendingProfileKey)
-    setPendingProfile(null)
-    await redirectByRole(token)
-  }
-
   const redirectByRole = useCallback(async (authToken) => {
     const { user } = await apiFetch('/me', { authToken })
-    if (returnTo && user.role === 'customer') {
-      navigate(returnTo, { replace: true })
-      return
-    }
     if (user.role === 'super_admin') {
       navigate('/super-admin', { replace: true })
       return
@@ -65,8 +60,24 @@ export function LoginPage() {
       navigateToHotelPath(navigate, user.hotel, '/admin', { replace: true })
       return
     }
-    navigate(returnTo || '/account', { replace: true })
-  }, [navigate, returnTo])
+    navigate(returnTo && !consoleReturnTo ? returnTo : buildTenantPath('/account', tenantMode), { replace: true })
+  }, [consoleReturnTo, navigate, returnTo, tenantMode])
+
+  async function registerGuestProfile(user, profile) {
+    const token = await user.getIdToken(true)
+    await apiFetch('/auth/register', {
+      method: 'POST',
+      authToken: token,
+      body: {
+        fullName: profile?.fullName || user.displayName || user.email,
+        phone: profile?.phone || undefined,
+        photoUrl: profile?.photoUrl || user.photoURL || undefined,
+      },
+    })
+    window.localStorage.removeItem(pendingProfileKey)
+    setPendingProfile(null)
+    await redirectByRole(token)
+  }
 
   async function submit(event) {
     event.preventDefault()
@@ -74,32 +85,27 @@ export function LoginPage() {
     setInfo('')
     setLoading(true)
     try {
-      const credential =
-        mode === 'register'
-          ? await registerWithEmail({ email: form.email, password: form.password, fullName: form.fullName })
-          : await loginWithEmail(form.email, form.password)
-      if (mode === 'register') {
-        savePendingProfile({ fullName: form.fullName, phone: form.phone, email: form.email })
+      if (!isAdminLogin && mode === 'register') {
+        const profile = { fullName: form.fullName, email: form.email, phone: form.phone, photoUrl: '' }
+        const credential = await registerWithEmail({ email: form.email, password: form.password, fullName: form.fullName })
+        savePendingProfile(profile)
         setMode('verify')
-        setInfo('Verification email sent. Open the link from your inbox, then come back and continue.')
+        setInfo(`Verification email sent to ${credential.user.email}. Confirm it, then continue here.`)
         return
       }
-      if (!credential.user.emailVerified) {
-        const profile = readPendingProfile(credential.user.email) || { fullName: credential.user.displayName || '', email: credential.user.email, phone: '' }
+
+      const credential = await loginWithEmail(form.email, form.password)
+      if (!isAdminLogin && !credential.user.emailVerified) {
+        const profile = readPendingProfile(credential.user.email) || { fullName: credential.user.displayName || '', email: credential.user.email, phone: '', photoUrl: credential.user.photoURL || '' }
         savePendingProfile(profile)
         setMode('verify')
         setInfo('Please verify your email before continuing.')
         return
       }
       const token = await credential.user.getIdToken(true)
-      try {
-        await redirectByRole(token)
-      } catch (redirectError) {
-        if (!redirectError.message.includes('not registered') && !redirectError.message.includes('not active')) throw redirectError
-        await finishVerifiedRegistration(credential.user, readPendingProfile(credential.user.email) || { fullName: credential.user.displayName || credential.user.email, email: credential.user.email })
-      }
+      await redirectByRole(token)
     } catch (err) {
-      setError(err.message)
+      setError(isAdminLogin ? err.message.replace('Complete your account setup before continuing.', 'This staff account is not registered. Ask the super admin to add it first.') : err.message)
     } finally {
       setLoading(false)
     }
@@ -149,7 +155,7 @@ export function LoginPage() {
         setInfo('Email is not verified yet. Open the verification link from your inbox, then try again.')
         return
       }
-      await finishVerifiedRegistration(user, readPendingProfile(user.email) || pendingProfile)
+      await registerGuestProfile(user, readPendingProfile(user.email) || pendingProfile)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -159,21 +165,21 @@ export function LoginPage() {
 
   async function google() {
     setError('')
+    setInfo('')
     setLoading(true)
     try {
       const credential = await loginWithGoogle()
       const token = await credential.user.getIdToken(true)
-      try {
-        await redirectByRole(token)
-      } catch (error) {
-        if (!error.message.includes('not registered') && !error.message.includes('not active')) throw error
-        await apiFetch('/auth/register', {
-          method: 'POST',
-          authToken: token,
-          body: { fullName: credential.user.displayName || credential.user.email || 'Guest' },
+      if (mode === 'register') {
+        await registerGuestProfile(credential.user, {
+          fullName: credential.user.displayName || credential.user.email || 'Guest',
+          email: credential.user.email,
+          phone: form.phone,
+          photoUrl: credential.user.photoURL || '',
         })
-        await redirectByRole(token)
+        return
       }
+      await redirectByRole(token)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -182,128 +188,124 @@ export function LoginPage() {
   }
 
   useEffect(() => {
-    if (authLoading || !isAuthenticated || !firebaseUser) return undefined
-    if (!firebaseUser.emailVerified && firebaseUser.providerData.some((provider) => provider.providerId === 'password')) {
-      const profile = readPendingProfile(firebaseUser.email) || { fullName: firebaseUser.displayName || '', email: firebaseUser.email, phone: '' }
+    if (authLoading || !isAuthenticated || !firebaseUser || mode === 'register' || mode === 'verify') return undefined
+    if (!isAdminLogin && !firebaseUser.emailVerified && firebaseUser.providerData.some((provider) => provider.providerId === 'password')) {
+      const profile = readPendingProfile(firebaseUser.email) || { fullName: firebaseUser.displayName || '', email: firebaseUser.email, phone: '', photoUrl: firebaseUser.photoURL || '' }
       savePendingProfile(profile)
       setMode('verify')
       return undefined
     }
     let active = true
     setError('')
-    setLoading(true)
     firebaseUser
       .getIdToken()
       .then((token) => {
         if (active) redirectByRole(token)
       })
       .catch((err) => {
-        if (active) {
-          setError(err.message)
-          setLoading(false)
-        }
+        if (active) setError(err.message)
       })
     return () => {
       active = false
     }
-  }, [authLoading, isAuthenticated, firebaseUser, redirectByRole])
+  }, [authLoading, isAuthenticated, firebaseUser, isAdminLogin, mode, redirectByRole])
+
+  const title = isAdminLogin
+    ? mode === 'forgot'
+      ? 'Reset staff password.'
+      : 'Hotel admin sign in.'
+    : mode === 'register'
+      ? 'Create your group account.'
+      : mode === 'verify'
+        ? 'Verify your email.'
+        : 'Sign in to your group account.'
+  const subtitle = isAdminLogin
+    ? 'Use the email and password assigned from the super admin panel. No email verification step is required for hotel admins.'
+    : mode === 'register'
+      ? 'Register once and use the same account for every hotel in the group.'
+      : 'Use the same method you used while registering on any group hotel website.'
 
   return (
-    <main className="container-page grid min-h-[78vh] items-center gap-10 py-12 lg:grid-cols-[1fr_460px]">
-      <FadeIn viewport={false} as="section">
-        <div className="max-w-2xl">
-          <p className="eyebrow">Secure access</p>
-          <h1 className="mt-3 text-5xl font-bold leading-tight text-charcoal md:text-6xl">
-            {mode === 'register' ? 'Create your guest account.' : mode === 'forgot' ? 'Reset your password.' : mode === 'verify' ? 'Verify your email.' : 'Continue your booking.'}
-          </h1>
-          <p className="mt-6 max-w-lg text-base leading-8 text-stone-600">
-            {returnTo
-              ? 'Your selected hotel, room, dates, and guest count will be preserved after login.'
-              : mode === 'register'
-                ? 'Create an account with email verification or use Google for instant verification.'
-                : mode === 'forgot'
-                  ? 'Enter your account email and we will send a secure Firebase password reset link.'
-                  : mode === 'verify'
-                    ? 'Open the verification email, confirm your address, then return here to continue.'
-                    : 'Sign in to manage bookings, download receipts, and view your stay history.'}
+    <main className="relative overflow-hidden bg-white">
+      <section className="container-page grid min-h-[calc(100svh-72px)] items-center gap-8 py-10 lg:grid-cols-[minmax(0,1fr)_440px] lg:py-14">
+        <FadeIn viewport={false} as="section" className="relative overflow-hidden rounded-lg bg-charcoal p-6 text-white shadow-panel sm:p-8 lg:min-h-[620px]">
+          <img src="https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1600&q=80" alt="" className="absolute inset-0 h-full w-full object-cover opacity-70" aria-hidden="true" />
+          <div className="absolute inset-0 bg-gradient-to-r from-black/86 via-black/52 to-black/16" />
+          <div className="relative flex min-h-[420px] flex-col justify-end lg:min-h-[560px]">
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-amber-100">{isAdminLogin ? 'Hotel console' : 'Guest access'}</p>
+            <h1 className="mt-4 max-w-2xl text-4xl font-black leading-none text-white sm:text-5xl md:text-6xl">{title}</h1>
+            <p className="mt-5 max-w-xl text-sm font-semibold leading-7 text-white/84 sm:text-base">{subtitle}</p>
+          </div>
+        </FadeIn>
+
+        <FadeIn viewport={false} as="form" onSubmit={mode === 'forgot' ? forgotPassword : submit} className="glass-panel p-5 sm:p-7">
+          <p className="eyebrow">{isAdminLogin ? 'Staff portal' : mode === 'register' ? 'New guest' : 'Guest account'}</p>
+          <h2 className="mt-2 text-3xl font-black leading-tight text-charcoal">
+            {isAdminLogin ? 'Email and password' : mode === 'register' ? 'Register once' : 'Welcome back'}
+          </h2>
+          <p className="mt-2 text-sm font-semibold leading-6 text-stone-600">
+            {isAdminLogin ? 'Credentials are managed only by the super admin.' : 'One guest account works across every hotel in the group.'}
           </p>
-          <div className="mt-8 hidden rounded-lg border border-mist bg-white p-6 shadow-soft md:block">
-            <p className="flex items-center gap-2 text-lg font-bold text-charcoal"><ShieldCheck size={20} className="text-amberline" /> Saved session</p>
-            <p className="mt-3 text-sm leading-7 text-stone-600">Firebase keeps your session in local browser storage, so returning admins and guests are routed automatically.</p>
-          </div>
-        </div>
-      </FadeIn>
 
-      <FadeIn viewport={false} as="form" onSubmit={mode === 'forgot' ? forgotPassword : submit} className="glass-panel p-5 sm:p-7">
-        {isAuthenticated && mode !== 'verify' ? <p className="mb-4 rounded-md border border-mist bg-bone p-3 text-sm font-semibold text-stone-700">You are already signed in. Opening your dashboard...</p> : null}
-        {mode !== 'verify' && mode !== 'forgot' ? <button type="button" onClick={google} className="btn-secondary w-full" disabled={loading}>
-          {loading ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />} Continue with Google
-        </button> : null}
-        {mode !== 'verify' && mode !== 'forgot' ? <div className="my-6 h-px bg-mist" /> : null}
+          {!isAdminLogin && mode !== 'verify' ? (
+            <button type="button" onClick={google} className="btn-secondary mt-6 w-full border-stone-300 bg-white" disabled={loading}>
+              {loading ? <Loader2 size={18} className="animate-spin" /> : <GoogleMark />} {mode === 'register' ? 'Register with Google' : 'Continue with Google'}
+            </button>
+          ) : null}
 
-        {mode === 'verify' ? (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-            <p className="flex items-center gap-2 text-lg font-extrabold text-amber-950"><Mail size={20} /> Check your email</p>
-            <p className="mt-2 text-sm font-semibold leading-6 text-stone-700">We sent a verification link to {firebaseUser?.email || pendingProfile?.email || 'your email'}. After verifying, come back here and continue. Check spam or promotions if it is not in the inbox.</p>
-            <div className="mt-4 grid gap-3">
-              <button className="btn-primary w-full" type="button" onClick={checkVerification} disabled={loading}>
-                {loading ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />} I verified my email
-              </button>
-              <button className="btn-secondary w-full" type="button" onClick={resendVerification} disabled={loading}>
-                <RotateCcw size={18} /> Resend email
-              </button>
+          {mode === 'verify' ? (
+            <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <p className="flex items-center gap-2 text-lg font-extrabold text-amber-950"><Mail size={20} /> Check your email</p>
+              <p className="mt-2 text-sm font-semibold leading-6 text-stone-700">We sent a verification link to {firebaseUser?.email || pendingProfile?.email || 'your email'}. After verifying, come back here and continue.</p>
+              <div className="mt-4 grid gap-3">
+                <button className="btn-primary w-full" type="button" onClick={checkVerification} disabled={loading}>
+                  {loading ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />} I verified my email
+                </button>
+                <button className="btn-secondary w-full" type="button" onClick={resendVerification} disabled={loading}>
+                  <RotateCcw size={18} /> Resend email
+                </button>
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {mode === 'register' ? (
-          <>
-            <label className="label" htmlFor="fullName">Full name</label>
-            <input id="fullName" className="input" value={form.fullName} onChange={(event) => setForm({ ...form, fullName: event.target.value })} required />
-            <label className="label mt-4" htmlFor="phone">Phone</label>
-            <input id="phone" className="input" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} />
-          </>
-        ) : null}
+          {!isAdminLogin && mode === 'register' ? (
+            <div className="mt-5 grid gap-4">
+              <Field label="Full name"><input className="input" value={form.fullName} onChange={(event) => setForm({ ...form, fullName: event.target.value })} required /></Field>
+              <Field label="Phone"><input className="input" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></Field>
+            </div>
+          ) : null}
 
-        {mode !== 'verify' ? (
-          <>
-            <label className={`label ${mode === 'register' ? 'mt-4' : ''}`} htmlFor="email">Email</label>
-            <input id="email" className="input" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} type="email" required />
-          </>
-        ) : null}
-        {mode !== 'forgot' && mode !== 'verify' ? (
-          <>
-            <label className="label mt-4" htmlFor="password">Password</label>
-            <input id="password" className="input" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} type="password" minLength={6} required />
-          </>
-        ) : null}
+          {mode !== 'verify' ? (
+            <>
+              <div className={`${!isAdminLogin ? 'mt-5 border-t border-mist pt-5' : 'mt-5'} grid gap-4`}>
+                <Field label="Email"><input id="email" className="input" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} type="email" required /></Field>
+                {mode !== 'forgot' ? <Field label="Password"><input id="password" className="input" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} type="password" minLength={6} required /></Field> : null}
+              </div>
+              <button className="btn-primary mt-6 w-full" type="submit" disabled={loading}>
+                {loading ? <Loader2 size={18} className="animate-spin" /> : mode === 'register' ? <UserPlus size={18} /> : mode === 'forgot' ? <Mail size={18} /> : <LogIn size={18} />}
+                {mode === 'register' ? 'Register with email' : mode === 'forgot' ? 'Send reset link' : 'Sign in'}
+              </button>
+            </>
+          ) : null}
 
-        {info ? <p className="mt-4 rounded-md bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">{info}</p> : null}
-        {error ? <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
-        {mode !== 'verify' ? <button className="btn-primary mt-6 w-full" type="submit" disabled={loading}>
-          {loading ? <Loader2 size={18} className="animate-spin" /> : mode === 'register' ? <Mail size={18} /> : <LogIn size={18} />}
-          {mode === 'register' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Sign in'}
-        </button> : null}
+          {info ? <p className="mt-4 rounded-md bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">{info}</p> : null}
+          {error ? <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
 
-        {mode === 'login' ? (
-          <button type="button" className="mt-4 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setMode('forgot') }}>
-            Forgot password?
-          </button>
-        ) : null}
-
-        <button
-          type="button"
-          className="mt-4 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal"
-          onClick={() => {
-            setError('')
-            setInfo('')
-            setMode((value) => (value === 'register' || value === 'forgot' || value === 'verify' ? 'login' : 'register'))
-          }}
-        >
-          {mode === 'register' ? 'Already have an account? Sign in' : mode === 'forgot' || mode === 'verify' ? 'Back to sign in' : 'New guest? Create an account'}
-        </button>
-        <Link to="/" className="mt-3 block text-center text-sm font-semibold text-stone-600 hover:text-charcoal">Return to hotel</Link>
-      </FadeIn>
+          {isAdminLogin && mode === 'login' ? <button type="button" className="mt-4 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setMode('forgot') }}>Forgot password?</button> : null}
+          {isAdminLogin && mode !== 'login' ? <button type="button" className="mt-4 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setMode('login') }}>Back to staff sign in</button> : null}
+          {!isAdminLogin && mode === 'login' ? <button type="button" className="mt-5 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setMode('register') }}><KeyRound className="mr-1 inline" size={15} /> New here? Create group account</button> : null}
+          {!isAdminLogin && mode === 'register' ? <button type="button" className="mt-5 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setMode('login') }}>Already registered? Sign in</button> : null}
+          <Link to={buildTenantPath('/', tenantMode)} className="mt-3 block text-center text-sm font-semibold text-stone-600 hover:text-charcoal">Return to hotel</Link>
+        </FadeIn>
+      </section>
     </main>
   )
+}
+
+function Field({ label, children }) {
+  return <label><span className="label">{label}</span>{children}</label>
+}
+
+function GoogleMark() {
+  return <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-sm font-black text-[#4285f4] shadow-sm">G</span>
 }

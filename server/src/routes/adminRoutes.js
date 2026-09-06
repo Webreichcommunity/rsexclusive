@@ -145,6 +145,13 @@ adminRoutes.get('/dashboard', async (req, res) => {
      FROM offers WHERE hotel_id = $1`,
     [req.hotel.id],
   )
+  const { rows: feedbackRows } = await query(
+    `SELECT count(*)::int AS feedback_count,
+            coalesce(avg(rating), 0)::numeric(3,2) AS average_rating
+     FROM hotel_feedback
+     WHERE hotel_id = $1`,
+    [req.hotel.id],
+  )
   res.json({
     hotel: {
       id: req.hotel.id,
@@ -155,7 +162,13 @@ adminRoutes.get('/dashboard', async (req, res) => {
       branding: req.hotel.branding,
       hero_image_url: req.hotel.hero_image_url,
     },
-    metrics: { ...rows[0], rooms: roomRows[0]?.rooms || 0, live_offers: offerRows[0]?.live_offers || 0 },
+    metrics: {
+      ...rows[0],
+      rooms: roomRows[0]?.rooms || 0,
+      live_offers: offerRows[0]?.live_offers || 0,
+      feedback_count: feedbackRows[0]?.feedback_count || 0,
+      average_rating: feedbackRows[0]?.average_rating || 0,
+    },
     arrivals,
   })
 })
@@ -281,7 +294,11 @@ adminRoutes.get('/users/:userId', async (req, res) => {
        coalesce(la.points_balance, 0)::int AS loyalty_points
      FROM users u
      LEFT JOIN booking_metrics bm ON bm.user_id = u.id
-     LEFT JOIN loyalty_accounts la ON la.user_id = u.id AND la.hotel_id = $1 AND la.scope = 'hotel'
+     LEFT JOIN LATERAL (
+       SELECT coalesce(sum(points_balance), 0)::int AS points_balance
+       FROM loyalty_accounts
+       WHERE user_id = u.id
+     ) la ON true
      WHERE u.id = $2 AND u.role = 'customer'
      LIMIT 1`,
     [req.hotel.id, req.params.userId],
@@ -298,7 +315,29 @@ adminRoutes.get('/users/:userId', async (req, res) => {
     [req.hotel.id, req.params.userId],
   )
 
-  res.json({ user: rows[0], bookings: bookingRows })
+  const { rows: feedbackRows } = await query(
+    `SELECT id, rating, message, status, created_at
+     FROM hotel_feedback
+     WHERE hotel_id = $1 AND user_id = $2
+     ORDER BY created_at DESC
+     LIMIT 50`,
+    [req.hotel.id, req.params.userId],
+  )
+
+  res.json({ user: rows[0], bookings: bookingRows, feedback: feedbackRows })
+})
+
+adminRoutes.get('/feedback', async (req, res) => {
+  const { rows } = await query(
+    `SELECT f.*, u.full_name AS user_full_name, u.profile AS user_profile
+     FROM hotel_feedback f
+     LEFT JOIN users u ON u.id = f.user_id
+     WHERE f.hotel_id = $1
+     ORDER BY f.created_at DESC
+     LIMIT 300`,
+    [req.hotel.id],
+  )
+  res.json({ feedback: rows })
 })
 
 adminRoutes.delete('/users/:userId', requireRole('hotel_admin', 'super_admin'), async (req, res) => {

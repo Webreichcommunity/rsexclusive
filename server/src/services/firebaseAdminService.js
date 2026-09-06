@@ -69,7 +69,7 @@ export function getFirebaseAuth() {
   return getAuth(getFirebaseApp())
 }
 
-export async function createOrUpdateFirebaseUser({ email, password, fullName, phone, disabled = false }) {
+export async function createOrUpdateFirebaseUser({ email, password, fullName, phone, disabled = false, emailVerified = true }) {
   const auth = getFirebaseAuth()
   const phoneNumber = phone?.startsWith('+') ? phone : undefined
   try {
@@ -79,7 +79,7 @@ export async function createOrUpdateFirebaseUser({ email, password, fullName, ph
       displayName: fullName,
       phoneNumber,
       disabled,
-      emailVerified: false,
+      emailVerified,
     })
   } catch (error) {
     if (error.code !== 'auth/email-already-exists') throw error

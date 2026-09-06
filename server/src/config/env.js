@@ -45,7 +45,7 @@ export const env = {
   },
   email: {
     resendApiKey: process.env.RESEND_API_KEY,
-    from: process.env.EMAIL_FROM || 'R.S. Exclusive <bookings@example.com>',
+    from: process.env.EMAIL_FROM || 'Ranjeet Groups <bookings@your-verified-domain.com>',
   },
   receipts: {
     publicBaseUrl: process.env.PUBLIC_RECEIPT_BASE_URL || 'http://localhost:4000/receipts',

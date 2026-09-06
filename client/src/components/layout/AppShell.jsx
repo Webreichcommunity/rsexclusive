@@ -1,11 +1,12 @@
 import { Link, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { CalendarDays, Instagram, LayoutDashboard, Menu, Phone, Sparkles, UserRound, X } from 'lucide-react'
+import { ArrowUpRight, CalendarDays, Instagram, Menu, Phone, Sparkles, UserRound, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { ContactPanel } from '../contact/ContactPanel.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { useAuth } from '../../modules/auth/authContext.js'
 import { apiFetch } from '../../services/apiClient.js'
+import { buildTenantPath, isConsolePath, stripTenantFromPath } from '../../modules/tenant/resolveTenant.js'
 
 const fallbackHomeMediaImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1800&q=80'
 
@@ -13,19 +14,19 @@ export function AppShell({ children, mode }) {
   const [open, setOpen] = useState(false)
   const location = useLocation()
   const { isAuthenticated, firebaseUser } = useAuth()
-  const isConsoleRoute = location.pathname.startsWith('/admin') || location.pathname.startsWith('/super-admin')
+  const isConsoleRoute = isConsolePath(location.pathname, mode)
   const tenant = useAsync(
     () => (mode.isTenant && !isConsoleRoute ? apiFetch('/tenant') : Promise.resolve({ hotel: null, offers: [] })),
     mode.isTenant && !isConsoleRoute ? `tenant:${mode.key}:${firebaseUser?.uid || 'guest'}:${firebaseUser?.emailVerified ? 'verified' : 'unverified'}` : 'group',
   )
   const hotel = tenant.data?.hotel
   const offers = tenant.data?.offers || []
-  const brandName = hotel?.branding?.logoText || hotel?.name || 'R.S. Exclusive'
-  const subline = mode.isTenant ? hotel?.address?.city || 'Boutique hospitality' : 'Stay & Fine Dine'
+  const brandName = mode.isTenant ? hotel?.branding?.logoText || hotel?.name || 'R.S. Exclusive' : 'Ranjeet Groups of Hotels Akola'
+  const subline = mode.isTenant ? hotel?.address?.city || 'Boutique hospitality' : 'Independent hotel collection'
   const accountLabel = isAuthenticated ? firstName(firebaseUser?.displayName || firebaseUser?.email || 'Account') : 'Login / Join'
-  const accountPath = isAuthenticated ? '/account' : tenantPath('/login?mode=register', mode)
+  const accountPath = isAuthenticated ? tenantPath('/account', mode) : tenantPath('/login?mode=register', mode)
   const accountTitle = isAuthenticated ? firebaseUser?.email || 'Account' : 'Login or join'
-  const isTenantHome = mode.isTenant && location.pathname === '/'
+  const isTenantHome = mode.isTenant && stripTenantFromPath(location.pathname, mode) === '/'
   const showOfferTicker = mode.isTenant && offers.length && !isConsoleRoute
   const headerClass = isTenantHome
     ? 'sticky top-0 z-40 border-b border-transparent bg-transparent text-white'
@@ -40,8 +41,9 @@ export function AppShell({ children, mode }) {
       ]
     : [
         ['Properties', '/#properties'],
-        ['Experience', '/#experience'],
-        ['Super Admin', '/super-admin'],
+        ['About', '/#experience'],
+        ['Gallery', '/#gallery'],
+        ['Feedback', '/#feedback'],
       ]
 
   useEffect(() => {
@@ -104,18 +106,18 @@ export function AppShell({ children, mode }) {
                 <CalendarDays size={17} /> Book Your Stay
               </Link>
             ) : (
-              <Link to="/super-admin" className="btn-dark !min-h-10 !px-4">
-                <LayoutDashboard size={17} /> Console
+              <Link to="/#properties" className="btn-dark !min-h-10 !px-4">
+                Explore Hotels <ArrowUpRight size={17} />
               </Link>
             )}
-            {isAuthenticated ? (
-              <Link className="btn-dark !min-h-10 !px-3" to="/account" title={accountTitle}>
+            {mode.isTenant && isAuthenticated ? (
+              <Link className="btn-dark !min-h-10 !px-3" to={accountPath} title={accountTitle}>
                 <UserRound size={17} />
                 {accountLabel}
               </Link>
-            ) : (
+            ) : mode.isTenant ? (
               <Link to={tenantPath('/login?mode=register', mode)} className="btn-dark !min-h-10 !px-4">{accountLabel}</Link>
-            )}
+            ) : null}
           </div>
 
           <div className="flex shrink-0 items-center gap-2 lg:hidden">
@@ -187,11 +189,11 @@ export function AppShell({ children, mode }) {
                 </nav>
 
                 <div className="mt-auto grid gap-3 border-t border-mist bg-bone/70 p-4">
-                  <Link to={accountPath} onClick={() => setOpen(false)} className="btn-secondary w-full">
+                  {mode.isTenant ? <Link to={accountPath} onClick={() => setOpen(false)} className="btn-secondary w-full">
                     <UserRound size={17} /> {accountLabel}
-                  </Link>
+                  </Link> : null}
                   {mode.isTenant ? <Link to={tenantPath('/book', mode)} onClick={() => setOpen(false)} className="btn-primary w-full"><CalendarDays size={17} /> Book Your Stay</Link> : null}
-                  {!mode.isTenant ? <Link to="/super-admin" onClick={() => setOpen(false)} className="btn-primary w-full"><LayoutDashboard size={17} /> Console</Link> : null}
+                  {!mode.isTenant ? <Link to="/#properties" onClick={() => setOpen(false)} className="btn-primary w-full">Explore Hotels <ArrowUpRight size={17} /></Link> : null}
                 </div>
               </motion.aside>
             </motion.div>
@@ -203,7 +205,7 @@ export function AppShell({ children, mode }) {
 
       <div className={isTenantHome ? 'relative z-10' : undefined}>{children}</div>
 
-      {mode.isTenant && hotel && !location.pathname.startsWith('/admin') ? <ContactPanel hotel={hotel} /> : null}
+      {mode.isTenant && hotel && !isConsoleRoute ? <ContactPanel hotel={hotel} /> : null}
 
       <footer className="relative z-10 bg-charcoal py-12 text-white md:py-16">
         <div className="container-page grid gap-10 lg:grid-cols-[1.2fr_0.8fr_0.8fr]">
@@ -326,13 +328,7 @@ function firstName(value) {
 }
 
 function tenantPath(path, mode) {
-  if (!mode?.isTenant || !mode.key || !['query', 'local-storage'].includes(mode.source)) return path
-  const [baseWithSearch, hash = ''] = path.split('#')
-  const [base, search = ''] = baseWithSearch.split('?')
-  const params = new URLSearchParams(search)
-  params.set('hotel', mode.key)
-  const query = params.toString()
-  return `${base}${query ? `?${query}` : ''}${hash ? `#${hash}` : ''}`
+  return buildTenantPath(path, mode)
 }
 
 function getBackgroundVideoSource(value) {

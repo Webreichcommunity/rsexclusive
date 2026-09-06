@@ -15,10 +15,12 @@ import {
   IndianRupee,
   LayoutDashboard,
   LogOut,
+  MessageSquare,
   Pencil,
   Plus,
   Search,
   Sparkles,
+  Star,
   Tag,
   Trash2,
   UserRound,
@@ -31,6 +33,7 @@ import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { uploadImageToCloudinary } from '../../services/cloudinaryUpload.js'
 import { logout } from '../auth/firebaseClient.js'
+import { buildTenantPath, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
 
 const tabs = [
   { key: 'summary', Icon: LayoutDashboard, label: 'Dashboard', text: 'Hotel summary' },
@@ -38,6 +41,7 @@ const tabs = [
   { key: 'create-booking', Icon: ClipboardPlus, label: 'Create booking', text: 'Manual reservations' },
   { key: 'bookings', Icon: CalendarDays, label: 'Bookings', text: 'Arrivals and history' },
   { key: 'users', Icon: UsersRound, label: 'Users', text: 'Guest profiles' },
+  { key: 'feedback', Icon: MessageSquare, label: 'Feedback', text: 'Guest messages' },
   { key: 'amenities', Icon: Sparkles, label: 'Amenities', text: 'Hotel add-ons' },
   { key: 'offers', Icon: Gift, label: 'Offers', text: 'Discount rules' },
 ]
@@ -115,12 +119,13 @@ export function AdminDashboard() {
   const [bookingForm, setBookingForm] = useState(null)
   const [manualBooking, setManualBooking] = useState(emptyManualBooking)
   const [activeUser, setActiveUser] = useState(null)
-  const [filters, setFilters] = useState({ rooms: '', bookings: '', bookingStatus: 'all', users: '', amenities: '', offers: '', offerAudience: 'all' })
+  const [filters, setFilters] = useState({ rooms: '', bookings: '', bookingStatus: 'all', users: '', feedback: '', amenities: '', offers: '', offerAudience: 'all' })
 
   const dashboard = useAsync(() => apiFetch('/admin/dashboard'), refreshKey)
   const rooms = useAsync(() => apiFetch('/admin/rooms'), refreshKey)
   const bookings = useAsync(() => apiFetch('/admin/bookings'), refreshKey)
   const users = useAsync(() => apiFetch('/admin/users'), refreshKey)
+  const feedback = useAsync(() => apiFetch('/admin/feedback'), refreshKey)
   const amenities = useAsync(() => apiFetch('/admin/amenities'), refreshKey)
   const offers = useAsync(() => apiFetch('/admin/offers'), refreshKey)
 
@@ -128,6 +133,7 @@ export function AdminDashboard() {
   const amenityList = amenities.data?.amenities || []
   const bookingList = bookings.data?.bookings || []
   const userList = users.data?.users || []
+  const feedbackList = feedback.data?.feedback || []
   const offerList = offers.data?.offers || []
 
   function refresh(message, type = 'success') {
@@ -424,6 +430,7 @@ export function AdminDashboard() {
     'create-booking': 'New',
     bookings: bookingList.length,
     users: userList.length,
+    feedback: feedbackList.length,
     amenities: amenityList.length,
     offers: offerList.length,
   }
@@ -480,7 +487,7 @@ export function AdminDashboard() {
             </nav>
 
             <div className="grid grid-cols-2 gap-2 border-t border-white/55 p-2 sm:p-3 lg:mt-auto lg:grid-cols-1">
-              <Link to="/" className="btn-secondary !min-h-10 border-white/70 bg-white/75 !px-3 backdrop-blur"><Home size={16} /> View hotel site</Link>
+              <Link to={buildTenantPath('/', resolveTenantFromLocation())} className="btn-secondary !min-h-10 border-white/70 bg-white/75 !px-3 backdrop-blur"><Home size={16} /> View hotel site</Link>
               <button className="btn-secondary !min-h-10 border-white/70 bg-white/75 !px-3 text-red-700 backdrop-blur" type="button" onClick={logout}><LogOut size={16} /> Logout</button>
             </div>
           </div>
@@ -505,7 +512,7 @@ export function AdminDashboard() {
           {notice ? <Notice type={notice.type} message={notice.message} /> : null}
 
           <div className="[&>section]:mt-0">
-            {activePage === 'summary' ? <SummaryPanel dashboard={dashboard} bookings={bookingList} rooms={roomList} offers={offerList} users={userList} amenities={amenityList} onTab={changePage} /> : null}
+            {activePage === 'summary' ? <SummaryPanel dashboard={dashboard} bookings={bookingList} rooms={roomList} offers={offerList} users={userList} feedback={feedbackList} amenities={amenityList} onTab={changePage} /> : null}
             {activePage === 'rooms' ? (
               <RoomsPanel
                 rooms={roomList}
@@ -540,6 +547,7 @@ export function AdminDashboard() {
               />
             ) : null}
             {activePage === 'users' ? <UsersPanel users={userList} filters={filters} setFilters={setFilters} saving={saving} onOpen={openUserProfile} onDelete={deleteCustomer} /> : null}
+            {activePage === 'feedback' ? <FeedbackPanel feedback={feedbackList} filters={filters} setFilters={setFilters} /> : null}
             {activePage === 'amenities' ? <AmenitiesPanel amenities={amenityList} form={amenityForm} setForm={setAmenityForm} showForm={showAmenityForm} setShowForm={setShowAmenityForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveAmenity} onDelete={deleteAmenity} /> : null}
             {activePage === 'offers' ? <OffersPanel offers={offerList} form={offerForm} setForm={setOfferForm} showForm={showOfferForm} setShowForm={setShowOfferForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveOffer} onDelete={deleteOffer} /> : null}
           </div>
@@ -573,7 +581,7 @@ function MobileConsoleHeader({ hotelName, hotelLogo, hotelLocation, activePage, 
             {tabs.map((tab) => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
           </select>
         </label>
-        <Link to="/" className="btn-secondary !min-h-11 !px-3 text-xs"><Home size={15} /> Site</Link>
+        <Link to={buildTenantPath('/', resolveTenantFromLocation())} className="btn-secondary !min-h-11 !px-3 text-xs"><Home size={15} /> Site</Link>
       </div>
 
       <div className="mt-3 rounded-md border border-white/70 bg-[linear-gradient(135deg,rgba(127,29,29,0.10),rgba(245,158,11,0.12),rgba(255,255,255,0.55))] p-3 shadow-sm">
@@ -589,7 +597,7 @@ function MobileConsoleHeader({ hotelName, hotelLogo, hotelLocation, activePage, 
   )
 }
 
-function SummaryPanel({ dashboard, bookings, rooms, offers, users, amenities, onTab }) {
+function SummaryPanel({ dashboard, bookings, rooms, offers, users, feedback, amenities, onTab }) {
   const metrics = dashboard.data?.metrics || {}
   const arrivals = dashboard.data?.arrivals || []
   const activeRooms = rooms.filter((room) => room.active).length
@@ -597,13 +605,15 @@ function SummaryPanel({ dashboard, bookings, rooms, offers, users, amenities, on
   const activeAmenities = amenities.filter((amenity) => amenity.active).length
   const liveOffers = offers.filter((offer) => offer.active).length
   const pendingBookings = bookings.filter((booking) => booking.status === 'payment_pending').length
+  const averageRating = Number(metrics.average_rating || 0)
   return (
     <section className="grid gap-3 sm:gap-6">
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-5">
         <Metric icon={CalendarDays} label="Upcoming arrivals" value={metrics.upcoming_bookings || 0} detail={`${metrics.confirmed_bookings || 0} confirmed bookings`} />
         <Metric icon={IndianRupee} label="Revenue" value={`Rs ${Number(metrics.revenue || 0).toLocaleString('en-IN')}`} detail="Confirmed and completed bookings" />
         <Metric icon={BedDouble} label="Room types" value={metrics.rooms || rooms.length} detail={`${activeRooms} active, ${featuredRooms}/3 featured`} />
         <Metric icon={UsersRound} label="Guest users" value={metrics.guests || users.length} detail={`${users.length} profiles in this hotel`} />
+        <Metric icon={MessageSquare} label="Feedback" value={metrics.feedback_count || feedback.length} detail={averageRating ? `${averageRating.toFixed(1)} average rating` : 'Guest feedback inbox'} />
       </div>
 
       <div className="grid gap-3 sm:gap-6 xl:grid-cols-[1fr_360px]">
@@ -634,6 +644,7 @@ function SummaryPanel({ dashboard, bookings, rooms, offers, users, amenities, on
               <StatRow label="Homepage room banners" value={`${featuredRooms}/3`} />
               <StatRow label="Active amenities" value={`${activeAmenities}/${amenities.length || 0}`} />
               <StatRow label="Live offers" value={liveOffers} />
+              <StatRow label="Feedback received" value={feedback.length} />
               <StatRow label="Pending payments" value={pendingBookings} />
             </div>
           </div>
@@ -654,9 +665,9 @@ function SummaryPanel({ dashboard, bookings, rooms, offers, users, amenities, on
           <SummaryCard title="Rooms" value={`${activeRooms} active`} text={`${rooms.length} categories, ${featuredRooms} featured on homepage.`} />
           <SummaryCard title="Bookings" value={`${bookings.length} total`} text={`${metrics.completed_bookings || 0} completed and ${metrics.pending_bookings || 0} payment pending.`} />
           <SummaryCard title="Guests" value={`${users.length} profiles`} text="Open user profiles to review booking history and loyalty points." />
+          <SummaryCard title="Feedback" value={`${feedback.length} notes`} text="Guest messages are saved against this hotel only." />
           <SummaryCard title="Amenities" value={`${activeAmenities} active`} text="Use logo URLs to make amenities easier to scan." />
           <SummaryCard title="Offers" value={`${liveOffers} active`} text="General and repeat-guest offers are validated during checkout." />
-          <SummaryCard title="Search" value="All pages" text="Rooms, bookings, users, amenities, and offers can be filtered directly." />
         </div>
       </div>
     </section>
@@ -843,7 +854,7 @@ function UsersPanel({ users, filters, setFilters, saving, onOpen, onDelete }) {
             {filtered.map((user) => (
               <article key={user.id} className="grid gap-3 rounded-md border border-white/70 bg-white/65 p-3 shadow-sm backdrop-blur sm:p-4 lg:rounded-none lg:border-0 lg:bg-transparent lg:p-5 lg:shadow-none lg:grid-cols-[1fr_140px_160px_220px] lg:items-center">
                 <div className="flex min-w-0 gap-3">
-                  <Avatar id={user.profile?.avatar} gender={user.profile?.gender} />
+                  <Avatar id={user.profile?.avatar} gender={user.profile?.gender} photoUrl={user.profile?.photoUrl} />
                   <div className="min-w-0">
                     <p className="truncate text-base font-extrabold sm:text-lg">{user.full_name || 'Guest user'}</p>
                     <p className="truncate text-sm font-semibold text-stone-500">{user.email}</p>
@@ -862,6 +873,40 @@ function UsersPanel({ users, filters, setFilters, saving, onOpen, onDelete }) {
             ))}
           </div>
         ) : <EmptyState title="No users found" text="Customers appear after signup or booking activity." />}
+      </div>
+    </section>
+  )
+}
+
+function FeedbackPanel({ feedback, filters, setFilters }) {
+  const filtered = filterByText(feedback, filters.feedback, ['name', 'email', 'phone', 'message', 'rating', 'status'])
+  return (
+    <section>
+      <div className="panel overflow-hidden">
+        <PanelHeader icon={MessageSquare} title="Hotel feedback" action={<SearchBox value={filters.feedback} onChange={(value) => setFilters({ ...filters, feedback: value })} placeholder="Search feedback" />} />
+        {filtered.length ? (
+          <div className="grid gap-3 p-3 sm:p-5 lg:grid-cols-2">
+            {filtered.map((item) => (
+              <article key={item.id} className="rounded-md border border-white/70 bg-white/65 p-4 shadow-sm backdrop-blur">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-lg font-extrabold">{item.name || item.user_full_name || 'Guest'}</p>
+                    <p className="truncate text-sm font-semibold text-stone-500">{item.email}</p>
+                    {item.phone ? <p className="mt-1 text-xs font-semibold text-stone-500">{item.phone}</p> : null}
+                  </div>
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-sm font-black text-amber-800">
+                    <Star size={15} fill="currentColor" /> {item.rating}/5
+                  </span>
+                </div>
+                <p className="mt-4 text-sm font-semibold leading-6 text-stone-700">{item.message}</p>
+                <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/70 pt-3 text-xs font-bold uppercase tracking-[0.1em] text-stone-500">
+                  <span>{item.status || 'new'}</span>
+                  <span>{formatDate(item.created_at)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : <EmptyState title="No feedback found" text="Feedback submitted from this hotel website will appear here." />}
       </div>
     </section>
   )
@@ -1173,7 +1218,7 @@ function UserProfileModal({ profile, saving, onDelete, onClose }) {
       <div className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex gap-3">
-            <Avatar id={user?.profile?.avatar} gender={user?.profile?.gender} />
+            <Avatar id={user?.profile?.avatar} gender={user?.profile?.gender} photoUrl={user?.profile?.photoUrl} />
             <div>
               <p className="eyebrow">User profile</p>
               <h2 className="mt-1 text-3xl font-semibold">{user?.full_name || user?.email}</h2>
@@ -1214,6 +1259,19 @@ function UserProfileModal({ profile, saving, onDelete, onClose }) {
                 </div>
               ))}
               {!profile.bookings?.length ? <p className="rounded-md bg-bone p-4 text-sm font-semibold text-stone-500">No bookings found for this hotel.</p> : null}
+            </div>
+            <h3 className="mt-6 font-extrabold">Feedback history</h3>
+            <div className="mt-3 grid gap-3">
+              {(profile.feedback || []).map((item) => (
+                <div key={item.id} className="rounded-md border border-mist p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-sm font-black text-amber-800"><Star size={15} fill="currentColor" /> {item.rating}/5</span>
+                    <span className="text-xs font-bold uppercase tracking-[0.1em] text-stone-500">{formatDate(item.created_at)}</span>
+                  </div>
+                  <p className="mt-3 text-sm font-semibold leading-6 text-stone-700">{item.message}</p>
+                </div>
+              ))}
+              {!profile.feedback?.length ? <p className="rounded-md bg-bone p-4 text-sm font-semibold text-stone-500">No feedback found for this hotel.</p> : null}
             </div>
             <button className="btn-secondary mt-6 text-red-700" type="button" disabled={saving} onClick={() => onDelete(user)}><Trash2 size={16} /> Delete user</button>
           </>
@@ -1355,7 +1413,10 @@ function BrandLogo({ name, logoUrl }) {
   )
 }
 
-function Avatar({ id = 'avatar-male', gender }) {
+function Avatar({ id = 'avatar-male', gender, photoUrl }) {
+  if (photoUrl) {
+    return <img src={photoUrl} alt="" className="h-12 w-12 shrink-0 rounded-full border border-white bg-white object-cover shadow-soft" />
+  }
   const option = profileOptions.find((item) => item.avatar === id || item.gender === gender) || profileOptions[0]
   const Icon = option.Icon
   return <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-gradient-to-br from-amberline to-wine text-white shadow-soft"><Icon size={22} /></span>
@@ -1396,6 +1457,7 @@ function activePageTitle(page) {
     'create-booking': 'Create manual booking',
     bookings: 'Booking management',
     users: 'User management',
+    feedback: 'Feedback inbox',
     amenities: 'Amenity catalog',
     offers: 'Offer management',
   }

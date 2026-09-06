@@ -9,7 +9,7 @@ import { createBookingHold, confirmBookingPayment } from '../services/bookingSer
 import { getHotelProfile, listActiveHotels, listAmenitiesForHotel, listOffersForHotel, listRoomsForHotel } from '../services/hotelService.js'
 import { createAsyncRouter } from '../utils/asyncRouter.js'
 import { createCache } from '../utils/cache.js'
-import { conflict, unauthorized } from '../utils/errors.js'
+import { badRequest, conflict, unauthorized } from '../utils/errors.js'
 
 export const publicRoutes = createAsyncRouter()
 const publicCache = createCache(60_000)
@@ -39,16 +39,26 @@ const verifyPaymentSchema = z.object({
 const registerSchema = z.object({
   fullName: z.string().min(2).max(120),
   phone: z.string().max(24).optional(),
+  photoUrl: z.string().url().max(500).optional(),
 })
 
 const profileSchema = z.object({
   fullName: z.string().min(2).max(120),
   phone: z.string().max(24).optional(),
   avatar: z.string().max(80).optional(),
+  photoUrl: z.string().url().max(500).optional().or(z.literal('')),
   gender: z.string().max(40).optional(),
   birthDate: z.string().max(20).optional(),
   city: z.string().max(80).optional(),
   address: z.string().max(160).optional(),
+})
+
+const feedbackSchema = z.object({
+  name: z.string().min(2).max(120),
+  email: z.string().email(),
+  phone: z.string().max(24).optional(),
+  rating: z.coerce.number().int().min(1).max(5).default(5),
+  message: z.string().min(5).max(1200),
 })
 
 publicRoutes.get('/hotels', async (_req, res) => {
@@ -68,11 +78,10 @@ publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, async (req, res
     listOffersForHotel(req.hotel.id, req.user?.id || null),
     req.user
       ? query(
-          `SELECT coalesce(points_balance, 0)::int AS points
+          `SELECT coalesce(sum(points_balance), 0)::int AS points
            FROM loyalty_accounts
-           WHERE hotel_id = $1 AND user_id = $2 AND scope = 'hotel'
-           LIMIT 1`,
-          [req.hotel.id, req.user.id],
+           WHERE user_id = $1`,
+          [req.user.id],
         )
       : Promise.resolve({ rows: [] }),
   ])
@@ -80,6 +89,8 @@ publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, async (req, res
 })
 
 publicRoutes.post('/auth/register', optionalTenant, validate(registerSchema), async (req, res) => {
+  if (!req.hotel) throw badRequest('Open a hotel website before creating a guest account.', 'hotel_context_required')
+
   const header = req.header('authorization')
   if (!header?.startsWith('Bearer ')) throw unauthorized('Missing Firebase ID token')
 
@@ -97,7 +108,7 @@ publicRoutes.post('/auth/register', optionalTenant, validate(registerSchema), as
 
   const user = await transaction(async (db) => {
     const { rows: existingRows } = await db.query(
-      `SELECT id, firebase_uid, email, role
+      `SELECT id, firebase_uid, email, role, profile
        FROM users
        WHERE firebase_uid = $1 OR email = $2
        ORDER BY CASE WHEN firebase_uid = $1 THEN 0 ELSE 1 END
@@ -120,31 +131,48 @@ publicRoutes.post('/auth/register', optionalTenant, validate(registerSchema), as
            full_name = $3,
            phone = $4,
            default_hotel_id = coalesce(default_hotel_id, $5),
+           profile = $6::jsonb,
            disabled_at = null,
            updated_at = now()
-         WHERE id = $6
-         RETURNING id, email, full_name, phone, role`,
-        [firebaseUser.uid, firebaseUser.email, req.body.fullName, req.body.phone || null, req.hotel?.id || null, existingRows[0].id],
+         WHERE id = $7
+         RETURNING id, email, full_name, phone, profile, role`,
+        [
+          firebaseUser.uid,
+          firebaseUser.email,
+          req.body.fullName,
+          req.body.phone || null,
+          req.hotel.id,
+          JSON.stringify({
+            ...(existingRows[0].profile || {}),
+            photoUrl: req.body.photoUrl || existingRows[0].profile?.photoUrl || firebaseUser.picture || '',
+          }),
+          existingRows[0].id,
+        ],
       )
       registered = rows[0]
     } else {
       const { rows } = await db.query(
-        `INSERT INTO users (firebase_uid, email, full_name, phone, role, default_hotel_id)
-         VALUES ($1, $2, $3, $4, 'customer', $5)
-         RETURNING id, email, full_name, phone, role`,
-        [firebaseUser.uid, firebaseUser.email, req.body.fullName, req.body.phone || null, req.hotel?.id || null],
+        `INSERT INTO users (firebase_uid, email, full_name, phone, profile, role, default_hotel_id)
+         VALUES ($1, $2, $3, $4, $5::jsonb, 'customer', $6)
+         RETURNING id, email, full_name, phone, profile, role`,
+        [
+          firebaseUser.uid,
+          firebaseUser.email,
+          req.body.fullName,
+          req.body.phone || null,
+          JSON.stringify({ photoUrl: req.body.photoUrl || firebaseUser.picture || '' }),
+          req.hotel.id,
+        ],
       )
       registered = rows[0]
     }
 
-    if (req.hotel?.id) {
-      await db.query(
-        `INSERT INTO customers (hotel_id, user_id)
-         VALUES ($1, $2)
-         ON CONFLICT (hotel_id, user_id) DO UPDATE SET updated_at = now()`,
-        [req.hotel.id, registered.id],
-      )
-    }
+    await db.query(
+      `INSERT INTO customers (hotel_id, user_id)
+       VALUES ($1, $2)
+       ON CONFLICT (hotel_id, user_id) DO UPDATE SET updated_at = now()`,
+      [req.hotel.id, registered.id],
+    )
 
     return registered
   })
@@ -171,7 +199,29 @@ publicRoutes.post('/payments/verify', authenticate, validate(verifyPaymentSchema
   res.json({ booking })
 })
 
-publicRoutes.get('/me', authenticate, async (req, res) => {
+publicRoutes.post('/feedback', requireTenant, optionalAuthenticate, validate(feedbackSchema), async (req, res) => {
+  const { rows } = await query(
+    `INSERT INTO hotel_feedback (hotel_id, user_id, name, email, phone, rating, message, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+     RETURNING id, rating, status, created_at`,
+    [
+      req.hotel.id,
+      req.user?.role === 'customer' ? req.user.id : null,
+      req.body.name,
+      req.body.email,
+      req.body.phone || null,
+      req.body.rating,
+      req.body.message,
+      JSON.stringify({
+        hotelName: req.hotel.name,
+        userAgent: req.header('user-agent') || '',
+      }),
+    ],
+  )
+  res.status(201).json({ feedback: rows[0] })
+})
+
+publicRoutes.get('/me', optionalTenant, authenticate, async (req, res) => {
   let hotelAdminHotel = null
   if (req.user.role === 'hotel_admin') {
     const { rows } = await query(
@@ -207,9 +257,10 @@ publicRoutes.get('/me', authenticate, async (req, res) => {
   })
 })
 
-publicRoutes.patch('/me', authenticate, validate(profileSchema), async (req, res) => {
+publicRoutes.patch('/me', optionalTenant, authenticate, validate(profileSchema), async (req, res) => {
   const profile = {
     avatar: req.body.avatar || 'avatar-1',
+    photoUrl: req.body.photoUrl || req.user.profile?.photoUrl || '',
     gender: req.body.gender || '',
     birthDate: req.body.birthDate || '',
     city: req.body.city || '',
@@ -237,7 +288,7 @@ publicRoutes.patch('/me', authenticate, validate(profileSchema), async (req, res
   })
 })
 
-publicRoutes.get('/me/bookings', authenticate, async (req, res) => {
+publicRoutes.get('/me/bookings', optionalTenant, authenticate, async (req, res) => {
   const { rows } = await query(
     `SELECT b.*, h.name AS hotel_name, rt.name AS room_type_name, i.pdf_url
      FROM bookings b
@@ -252,7 +303,7 @@ publicRoutes.get('/me/bookings', authenticate, async (req, res) => {
   res.json({ bookings: rows })
 })
 
-publicRoutes.get('/me/bookings/:bookingReference', authenticate, async (req, res) => {
+publicRoutes.get('/me/bookings/:bookingReference', optionalTenant, authenticate, async (req, res) => {
   const { rows } = await query(
     `SELECT b.*, h.name AS hotel_name, rt.name AS room_type_name, rt.hero_image_url AS room_image_url, i.pdf_url
      FROM bookings b
