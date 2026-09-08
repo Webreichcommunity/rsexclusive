@@ -1,51 +1,63 @@
 import {
   ArrowLeft,
+  Activity,
+  Ban,
   BarChart3,
   Building2,
   CalendarDays,
   CheckCircle2,
   CircleAlert,
+  Download,
   Eye,
   ImagePlus,
+  LogOut,
   Pencil,
+  Power,
   Plus,
   ShieldCheck,
   Trash2,
   UserPlus,
   UsersRound,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { FadeIn, Stagger, StaggerItem } from '../../components/ui/Motion.jsx'
 import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { StatusPill } from '../../components/ui/StatusPill.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { uploadImageToCloudinary } from '../../services/cloudinaryUpload.js'
+import { loginWithGoogle, logout } from '../auth/firebaseClient.js'
 import { buildHotelUrl, formatHotelHost } from '../tenant/resolveTenant.js'
+
+const HOTEL_LIMIT = 3
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024
+const activityArchiveKey = 'rs-exclusive-super-admin-activities'
 
 const emptyHotel = {
   name: '',
   legalName: '',
   slug: '',
   subdomain: '',
-  customDomain: '',
   description: '',
   line1: '',
   city: '',
   state: '',
   country: 'India',
   email: '',
-  web3formsAccessKey: '',
   phones: '',
   whatsapp: '',
   instagram: '',
   facebook: '',
+  linkedin: '',
+  twitter: '',
   checkIn: '14:00',
   checkOut: '11:00',
-  amenities: '',
   logoUrl: '',
+  logoPublicId: '',
   heroImageUrl: '',
-  showcaseImageUrl: '',
+  heroImages: [],
+  showcaseImages: [],
+  diningImage: null,
   youtubeEmbedUrl: '',
   gallery: [],
 }
@@ -64,6 +76,7 @@ export function SuperAdminPage() {
   const [selectedHotelId, setSelectedHotelId] = useState('')
   const [hotelForm, setHotelForm] = useState(emptyHotel)
   const [adminForm, setAdminForm] = useState(emptyAdmin)
+  const [activityArchive, setActivityArchive] = useState(readActivityArchive)
   const [notice, setNotice] = useState(null)
   const [saving, setSaving] = useState(false)
 
@@ -72,9 +85,18 @@ export function SuperAdminPage() {
     () => (mode === 'detail' && selectedHotelId ? apiFetch(`/super-admin/hotels/${selectedHotelId}`) : Promise.resolve(null)),
     `${mode}:${selectedHotelId}:${refreshKey}`,
   )
+  const activities = useAsync(
+    () => (mode === 'activities' ? apiFetch('/super-admin/activities?limit=300') : Promise.resolve({ activities: [] })),
+    `${mode}:${refreshKey}`,
+  )
 
   const hotels = useMemo(() => overview.data?.hotels || [], [overview.data?.hotels])
+  const canCreateHotel = hotels.length < HOTEL_LIMIT
   const selectedHotel = detail.data?.hotel || hotels.find((hotel) => hotel.id === selectedHotelId)
+  const visibleActivities = useMemo(
+    () => mergeActivities(activities.data?.activities || [], activityArchive),
+    [activities.data?.activities, activityArchive],
+  )
   const totals = useMemo(
     () => ({
       hotels: hotels.length,
@@ -86,6 +108,10 @@ export function SuperAdminPage() {
   )
 
   function updateHotel(field, value) {
+    if (field === 'youtubeEmbedUrl' && value && hotelForm.heroImages.length) {
+      setNotice({ type: 'error', message: 'Remove uploaded hero images before using a YouTube or video URL.' })
+      return
+    }
     setHotelForm((current) => ({
       ...current,
       [field]: value,
@@ -95,6 +121,10 @@ export function SuperAdminPage() {
   }
 
   function openCreate() {
+    if (!canCreateHotel) {
+      setNotice({ type: 'error', message: 'Your plan includes 3 hotels. Contact WebReich to add another hotel.' })
+      return
+    }
     setSelectedHotelId('')
     setHotelForm(emptyHotel)
     setNotice(null)
@@ -116,14 +146,32 @@ export function SuperAdminPage() {
 
   async function uploadHotelImage(field, file, folder) {
     if (!file) return
+    if (file.size > MAX_IMAGE_SIZE) {
+      setNotice({ type: 'error', message: `${file.name} is larger than 10 MB. Please choose a smaller image.` })
+      return
+    }
+    if (field === 'heroImages' && hotelForm.youtubeEmbedUrl) {
+      setNotice({ type: 'error', message: 'Remove the YouTube or video URL before uploading hero images.' })
+      return
+    }
     setSaving(true)
     try {
       const image = await uploadImageToCloudinary(file, {
         signatureUrl: selectedHotelId ? `/super-admin/hotels/${selectedHotelId}/media/signature` : '/super-admin/media/signature',
         folder,
       })
-      if (field === 'gallery') {
-        setHotelForm((current) => ({ ...current, gallery: [...current.gallery, image.secureUrl] }))
+      const media = { url: image.secureUrl, publicId: image.publicId, alt: file.name.replace(/\.[^.]+$/, '') }
+      if (field === 'logoUrl') {
+        setHotelForm((current) => ({ ...current, logoUrl: image.secureUrl, logoPublicId: image.publicId }))
+      } else if (field === 'diningImage') {
+        setHotelForm((current) => ({ ...current, diningImage: media }))
+      } else if (['heroImages', 'showcaseImages', 'gallery'].includes(field)) {
+        const limits = { heroImages: 3, showcaseImages: 3, gallery: 5 }
+        setHotelForm((current) => ({
+          ...current,
+          [field]: [...current[field], media].slice(0, limits[field]),
+          ...(field === 'heroImages' ? { heroImageUrl: current.heroImageUrl || image.secureUrl } : {}),
+        }))
       } else {
         setHotelForm((current) => ({ ...current, [field]: image.secureUrl }))
       }
@@ -132,6 +180,30 @@ export function SuperAdminPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  async function uploadHotelImages(field, files, folder, limit) {
+    if (limit < 1) {
+      setNotice({ type: 'error', message: 'Image limit reached for this section. Remove an image before uploading another.' })
+      return
+    }
+    const selectedFiles = Array.from(files || []).slice(0, limit)
+    for (const file of selectedFiles) {
+      await uploadHotelImage(field, file, folder)
+    }
+  }
+
+  function removeHotelMedia(field, index = 0) {
+    setHotelForm((current) => {
+      if (field === 'logoUrl') return { ...current, logoUrl: '', logoPublicId: '' }
+      if (field === 'diningImage') return { ...current, diningImage: null }
+      const nextItems = current[field].filter((_, itemIndex) => itemIndex !== index)
+      return {
+        ...current,
+        [field]: nextItems,
+        ...(field === 'heroImages' ? { heroImageUrl: nextItems[0]?.url || '' } : {}),
+      }
+    })
   }
 
   async function saveHotel(event) {
@@ -159,10 +231,12 @@ export function SuperAdminPage() {
   }
 
   async function deleteHotel(hotel) {
-    if (!window.confirm(`Delete ${hotel.name}? Hotels with bookings should be deactivated instead.`)) return
+    if (!window.confirm(`Delete ${hotel.name}? You will be asked to confirm with Google. Hotels with bookings should be suspended instead.`)) return
     setSaving(true)
     try {
-      await apiFetch(`/super-admin/hotels/${hotel.id}`, { method: 'DELETE' })
+      const credential = await loginWithGoogle()
+      const reauthToken = await credential.user.getIdToken(true)
+      await apiFetch(`/super-admin/hotels/${hotel.id}`, { method: 'DELETE', body: { reauthToken } })
       setMode('list')
       setSelectedHotelId('')
       setRefreshKey((value) => value + 1)
@@ -173,6 +247,15 @@ export function SuperAdminPage() {
       setSaving(false)
     }
   }
+
+  useEffect(() => {
+    if (!activities.data?.activities?.length) return
+    setActivityArchive((current) => {
+      const next = mergeActivities(activities.data.activities, current)
+      writeActivityArchive(next)
+      return next
+    })
+  }, [activities.data?.activities])
 
   async function toggleHotelStatus(hotel) {
     const status = hotel.status === 'active' ? 'inactive' : 'active'
@@ -227,7 +310,11 @@ export function SuperAdminPage() {
               <h1 className="mt-2 text-5xl font-semibold leading-none md:text-6xl">Platform console</h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-stone-300">Hotels, branding, admins, tenant reports, and publishing controls in one compact workspace.</p>
             </div>
-            <button className="btn-dark" onClick={openCreate}><Plus size={18} /> Add New Hotel</button>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-dark" type="button" onClick={() => setMode('activities')}><Activity size={18} /> Activities</button>
+              <button className="btn-dark" type="button" onClick={openCreate} disabled={!canCreateHotel || saving}><Plus size={18} /> Add New Hotel</button>
+              <button className="btn-dark text-red-700" type="button" onClick={logout}><LogOut size={18} /> Logout</button>
+            </div>
           </FadeIn>
         </div>
       </section>
@@ -236,14 +323,18 @@ export function SuperAdminPage() {
         {overview.error ? <Notice type="error" message={overview.error.message} /> : null}
         {notice ? <Notice type={notice.type} message={notice.message} /> : null}
 
-        <section className="grid gap-3 md:grid-cols-4">
-          <Metric icon={Building2} label="Hotels" value={totals.hotels} />
+        <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <Metric icon={Building2} label="Hotels" value={`${totals.hotels}/${HOTEL_LIMIT}`} />
           <Metric icon={ShieldCheck} label="Admins" value={totals.admins} />
           <Metric icon={UsersRound} label="Guest users" value={totals.customers} />
           <Metric icon={BarChart3} label="Revenue" value={`Rs ${totals.revenue.toLocaleString('en-IN')}`} />
         </section>
+        {!canCreateHotel ? (
+          <Notice type="error" message="Your plan includes 3 hotels. Contact WebReich to add another hotel." />
+        ) : null}
 
-        {mode === 'list' ? <HotelList hotels={hotels} onDetail={openDetail} onEdit={openEdit} onStatus={toggleHotelStatus} onDelete={deleteHotel} saving={saving} /> : null}
+        {mode === 'list' ? <HotelList hotels={hotels} onDetail={openDetail} onStatus={toggleHotelStatus} onDelete={deleteHotel} saving={saving} /> : null}
+        {mode === 'activities' ? <ActivitiesPage activities={visibleActivities} loading={activities.loading} onBack={() => setMode('list')} /> : null}
         {['create', 'edit'].includes(mode) ? (
           <HotelForm
             mode={mode}
@@ -253,6 +344,8 @@ export function SuperAdminPage() {
             onChange={updateHotel}
             onSubmit={saveHotel}
             onUpload={uploadHotelImage}
+            onUploadMany={uploadHotelImages}
+            onRemoveMedia={removeHotelMedia}
           />
         ) : null}
         {mode === 'detail' ? (
@@ -277,7 +370,7 @@ export function SuperAdminPage() {
   )
 }
 
-function HotelList({ hotels, onDetail, onEdit, onStatus, onDelete, saving }) {
+function HotelList({ hotels, onDetail, onStatus, onDelete, saving }) {
   return (
     <section className="mt-6 overflow-hidden rounded-lg border border-stone-200 bg-white shadow-soft">
       <div className="grid grid-cols-[1.2fr_0.7fr_0.6fr_0.6fr_160px] gap-4 border-b border-stone-200 bg-stone-100 px-4 py-3 text-xs font-extrabold uppercase tracking-[0.12em] text-stone-500 max-lg:hidden">
@@ -298,7 +391,7 @@ function HotelList({ hotels, onDetail, onEdit, onStatus, onDelete, saving }) {
             <button type="button" onClick={() => onStatus(hotel)} disabled={saving}><StatusPill status={hotel.status} /></button>
             <div className="flex flex-wrap gap-2">
               <IconButton label="View" onClick={() => onDetail(hotel)} icon={Eye} />
-              <IconButton label="Edit" onClick={() => onEdit(hotel)} icon={Pencil} />
+              <IconButton label={hotel.status === 'active' ? 'Suspend hotel' : 'Resume hotel'} onClick={() => onStatus(hotel)} icon={hotel.status === 'active' ? Ban : Power} />
               <IconButton label="Delete" onClick={() => onDelete(hotel)} icon={Trash2} danger />
             </div>
           </StaggerItem>
@@ -309,7 +402,7 @@ function HotelList({ hotels, onDetail, onEdit, onStatus, onDelete, saving }) {
   )
 }
 
-function HotelForm({ mode, form, saving, onBack, onChange, onSubmit, onUpload }) {
+function HotelForm({ mode, form, saving, onBack, onChange, onSubmit, onUpload, onUploadMany, onRemoveMedia }) {
   return (
     <FadeIn className="mt-6 rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
       <div className="mb-5 flex flex-col justify-between gap-3 md:flex-row md:items-center">
@@ -325,7 +418,6 @@ function HotelForm({ mode, form, saving, onBack, onChange, onSubmit, onUpload })
           <Field label="Legal name"><input className="input" value={form.legalName} onChange={(event) => onChange('legalName', event.target.value)} /></Field>
           <Field label="Slug"><input className="input" value={form.slug} onChange={(event) => onChange('slug', slugify(event.target.value))} required /></Field>
           <Field label="Subdomain"><input className="input" value={form.subdomain} onChange={(event) => onChange('subdomain', slugify(event.target.value))} required /></Field>
-          <Field label="Custom domain"><input className="input" value={form.customDomain} onChange={(event) => onChange('customDomain', event.target.value)} /></Field>
           <Field label="Description"><textarea className="input min-h-28 py-3" value={form.description} onChange={(event) => onChange('description', event.target.value)} required /></Field>
         </FormBlock>
 
@@ -334,20 +426,28 @@ function HotelForm({ mode, form, saving, onBack, onChange, onSubmit, onUpload })
           <Field label="City"><input className="input" value={form.city} onChange={(event) => onChange('city', event.target.value)} required /></Field>
           <Field label="State"><input className="input" value={form.state} onChange={(event) => onChange('state', event.target.value)} /></Field>
           <Field label="Email"><input className="input" type="email" value={form.email} onChange={(event) => onChange('email', event.target.value)} /></Field>
-          <Field label="Web3Forms access key"><input className="input" value={form.web3formsAccessKey} onChange={(event) => onChange('web3formsAccessKey', event.target.value)} placeholder="Hotel inquiry inbox key" /></Field>
           <Field label="Phone numbers"><input className="input" placeholder="+91..., +91..." value={form.phones} onChange={(event) => onChange('phones', event.target.value)} /></Field>
-          <Field label="WhatsApp"><input className="input" value={form.whatsapp} onChange={(event) => onChange('whatsapp', event.target.value)} /></Field>
+          <Field label="WhatsApp number"><input className="input" placeholder="919876543210" value={form.whatsapp} onChange={(event) => onChange('whatsapp', event.target.value)} /></Field>
           <Field label="Instagram link"><input className="input" value={form.instagram} onChange={(event) => onChange('instagram', event.target.value)} /></Field>
           <Field label="Facebook link"><input className="input" value={form.facebook} onChange={(event) => onChange('facebook', event.target.value)} /></Field>
+          <Field label="LinkedIn URL"><input className="input" value={form.linkedin} onChange={(event) => onChange('linkedin', event.target.value)} /></Field>
+          <Field label="Twitter / X URL"><input className="input" value={form.twitter} onChange={(event) => onChange('twitter', event.target.value)} /></Field>
         </FormBlock>
 
         <FormBlock title="Branding and media">
-          <UploadField label="Hotel logo" value={form.logoUrl} onFile={(file) => onUpload('logoUrl', file, 'hotel-logo')} />
-          <UploadField label="Front / hero image" value={form.heroImageUrl} onFile={(file) => onUpload('heroImageUrl', file, 'hotel-hero')} />
-          <UploadField label="Showcase photo" value={form.showcaseImageUrl} onFile={(file) => onUpload('showcaseImageUrl', file, 'hotel-showcase')} />
-          <Field label="YouTube embed or video URL"><input className="input" value={form.youtubeEmbedUrl} onChange={(event) => onChange('youtubeEmbedUrl', event.target.value)} placeholder="https://www.youtube.com/embed/..." /></Field>
-          <UploadField label="Gallery images" multiple value={`${form.gallery.length} uploaded`} onFile={(file) => onUpload('gallery', file, 'hotel-gallery')} />
-          <Field label="Amenities"><input className="input" value={form.amenities} onChange={(event) => onChange('amenities', event.target.value)} placeholder="Spa, pool, rooftop dining" /></Field>
+          <UploadField label="Hotel logo" value={form.logoUrl ? 'Logo uploaded' : ''} onFile={(file) => onUpload('logoUrl', file, 'hotel-logo')} />
+          <MediaList items={form.logoUrl ? [{ url: form.logoUrl, alt: 'Logo' }] : []} singular="logo" onRemove={() => onRemoveMedia('logoUrl')} />
+          <UploadField label="Hero images (max 3, up to 10 MB each)" multiple disabled={Boolean(form.youtubeEmbedUrl)} value={`${form.heroImages.length}/3 uploaded`} onFiles={(files) => onUploadMany('heroImages', files, 'hotel-hero', 3 - form.heroImages.length)} />
+          <MediaList items={form.heroImages} singular="hero image" onRemove={(index) => onRemoveMedia('heroImages', index)} />
+          <Field label="YouTube embed or video URL">
+            <input className="input" value={form.youtubeEmbedUrl} disabled={form.heroImages.length > 0} onChange={(event) => onChange('youtubeEmbedUrl', event.target.value)} placeholder="https://www.youtube.com/embed/..." />
+          </Field>
+          <UploadField label="Showcase images (max 3, up to 10 MB each)" multiple value={`${form.showcaseImages.length}/3 uploaded`} onFiles={(files) => onUploadMany('showcaseImages', files, 'hotel-showcase', 3 - form.showcaseImages.length)} />
+          <MediaList items={form.showcaseImages} singular="showcase image" onRemove={(index) => onRemoveMedia('showcaseImages', index)} />
+          <UploadField label="Dining image (1 image, up to 10 MB)" value={form.diningImage?.url ? 'Dining image uploaded' : ''} onFile={(file) => onUpload('diningImage', file, 'hotel-dining')} />
+          <MediaList items={form.diningImage ? [form.diningImage] : []} singular="dining image" onRemove={() => onRemoveMedia('diningImage')} />
+          <UploadField label="Gallery images (max 5, up to 10 MB each)" multiple value={`${form.gallery.length}/5 uploaded`} onFiles={(files) => onUploadMany('gallery', files, 'hotel-gallery', 5 - form.gallery.length)} />
+          <MediaList items={form.gallery} singular="gallery image" onRemove={(index) => onRemoveMedia('gallery', index)} />
           <Field label="Check-in"><input className="input" value={form.checkIn} onChange={(event) => onChange('checkIn', event.target.value)} /></Field>
           <Field label="Check-out"><input className="input" value={form.checkOut} onChange={(event) => onChange('checkOut', event.target.value)} /></Field>
         </FormBlock>
@@ -359,18 +459,38 @@ function HotelForm({ mode, form, saving, onBack, onChange, onSubmit, onUpload })
 }
 
 function HotelDetail({ hotel, loading, detail, hotels, adminForm, saving, onBack, onEdit, onDelete, onAdminChange, onCreateAdmin, onRemoveAdmin, onDeleteAdmin }) {
+  const [showAdminForm, setShowAdminForm] = useState(false)
+
+  useEffect(() => {
+    setShowAdminForm(false)
+  }, [hotel?.id])
+
   if (loading || !hotel) return <LoadingState label="Loading hotel report" />
   const bookings = detail?.bookings || []
   const rooms = detail?.rooms || []
+  const payments = detail?.payments || []
+  const capturedPayments = payments.find((payment) => payment.status === 'captured')
+  const createdPayments = payments.reduce((sum, payment) => sum + Number(payment.count || 0), 0)
+  const performanceRows = [
+    { icon: CalendarDays, label: 'Bookings', value: hotel.bookings || 0 },
+    { icon: UsersRound, label: 'Guest users', value: hotel.customers || 0 },
+    { icon: BarChart3, label: 'Revenue', value: `Rs ${Number(hotel.revenue || 0).toLocaleString('en-IN')}` },
+    { icon: BedIcon, label: 'Room types', value: rooms.length },
+    { icon: ShieldCheck, label: 'Hotel admins', value: hotel.admins?.length || 0 },
+    { icon: CheckCircle2, label: 'Captured payments', value: capturedPayments?.count || 0 },
+    { icon: BarChart3, label: 'Payment value', value: `Rs ${Number(capturedPayments?.amount || 0).toLocaleString('en-IN')}` },
+    { icon: Activity, label: 'Payment attempts', value: createdPayments },
+  ]
+
   return (
-    <FadeIn className="mt-6 grid gap-6">
+    <FadeIn className="mt-6 grid gap-4">
       <div className="overflow-hidden rounded-lg border border-stone-200 bg-white shadow-panel">
-        <div className="relative h-64">
+        <div className="relative h-48 sm:h-56">
           <img src={hotel.hero_image_url || hotel.branding?.logoUrl || 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1400&q=80'} alt={hotel.name} className="h-full w-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-r from-charcoal/70 to-transparent" />
           <div className="absolute bottom-5 left-5 text-white">
             <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-white/70">Hotel report</p>
-            <h2 className="mt-2 text-5xl font-semibold">{hotel.name}</h2>
+            <h2 className="mt-2 text-3xl font-semibold sm:text-4xl">{hotel.name}</h2>
           </div>
         </div>
         <div className="flex flex-wrap gap-2 p-4">
@@ -381,16 +501,16 @@ function HotelDetail({ hotel, loading, detail, hotels, adminForm, saving, onBack
         </div>
       </div>
 
-      <section className="grid gap-3 md:grid-cols-4">
-        <Metric icon={CalendarDays} label="Bookings" value={hotel.bookings || 0} />
-        <Metric icon={UsersRound} label="Guest users" value={hotel.customers || 0} />
-        <Metric icon={BarChart3} label="Revenue" value={`Rs ${Number(hotel.revenue || 0).toLocaleString('en-IN')}`} />
-        <Metric icon={BedIcon} label="Room types" value={rooms.length} />
-      </section>
+      <HotelPerformance rows={performanceRows} />
 
-      <section className="grid gap-6 xl:grid-cols-[1fr_430px]">
+      <section className="grid gap-4">
         <div className="rounded-lg border border-stone-200 bg-white p-5 shadow-soft">
-          <SectionTitle icon={ShieldCheck} title="Hotel admins" />
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+            <SectionTitle icon={ShieldCheck} title="Hotel admins" />
+            <button className="btn-secondary w-full sm:w-fit" type="button" onClick={() => setShowAdminForm((value) => !value)}>
+              <UserPlus size={18} /> {showAdminForm ? 'Close form' : 'Add admin'}
+            </button>
+          </div>
           <div className="mt-4 grid gap-3">
             {(hotel.admins || []).map((admin) => (
               <div key={admin.id} className="flex flex-col justify-between gap-3 rounded-md border border-stone-200 p-3 sm:flex-row sm:items-center">
@@ -408,26 +528,30 @@ function HotelDetail({ hotel, loading, detail, hotels, adminForm, saving, onBack
           </div>
         </div>
 
-        <form onSubmit={onCreateAdmin} className="rounded-lg border border-stone-200 bg-white p-5 shadow-soft">
-          <SectionTitle icon={UserPlus} title="Add hotel admin" />
-          <div className="mt-4 grid gap-3">
-            <Field label="Full name"><input className="input" value={adminForm.fullName} onChange={(event) => onAdminChange({ ...adminForm, fullName: event.target.value })} required /></Field>
-            <Field label="Email"><input className="input" type="email" value={adminForm.email} onChange={(event) => onAdminChange({ ...adminForm, email: event.target.value })} required /></Field>
-            <Field label="Phone"><input className="input" value={adminForm.phone} onChange={(event) => onAdminChange({ ...adminForm, phone: event.target.value })} /></Field>
-            <Field label="Temporary password"><input className="input" type="password" minLength={8} value={adminForm.password} onChange={(event) => onAdminChange({ ...adminForm, password: event.target.value })} required /></Field>
-            <Field label="Assign hotels">
-              <select
-                className="input min-h-28 py-2"
-                multiple
-                value={adminForm.hotelIds.length ? adminForm.hotelIds : [hotel.id]}
-                onChange={(event) => onAdminChange({ ...adminForm, hotelIds: Array.from(event.target.selectedOptions).map((option) => option.value) })}
-              >
-                {hotels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
-            </Field>
-            <button className="btn-primary w-full" disabled={saving}><UserPlus size={18} /> Add admin</button>
-          </div>
-        </form>
+        {showAdminForm ? (
+          <form onSubmit={onCreateAdmin} className="rounded-lg border border-amberline/25 bg-white p-5 shadow-soft">
+            <SectionTitle icon={UserPlus} title="Add hotel admin" />
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <Field label="Full name"><input className="input" value={adminForm.fullName} onChange={(event) => onAdminChange({ ...adminForm, fullName: event.target.value })} required /></Field>
+              <Field label="Email"><input className="input" type="email" value={adminForm.email} onChange={(event) => onAdminChange({ ...adminForm, email: event.target.value })} required /></Field>
+              <Field label="Phone"><input className="input" value={adminForm.phone} onChange={(event) => onAdminChange({ ...adminForm, phone: event.target.value })} /></Field>
+              <Field label="Temporary password"><input className="input" type="password" minLength={8} value={adminForm.password} onChange={(event) => onAdminChange({ ...adminForm, password: event.target.value })} required /></Field>
+              <Field label="Assign hotels">
+                <select
+                  className="input min-h-28 py-2"
+                  multiple
+                  value={adminForm.hotelIds.length ? adminForm.hotelIds : [hotel.id]}
+                  onChange={(event) => onAdminChange({ ...adminForm, hotelIds: Array.from(event.target.selectedOptions).map((option) => option.value) })}
+                >
+                  {hotels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </Field>
+              <div className="flex items-end">
+                <button className="btn-primary w-full" disabled={saving}><UserPlus size={18} /> Add admin</button>
+              </div>
+            </div>
+          </form>
+        ) : null}
       </section>
 
       <section className="grid gap-6 xl:grid-cols-2">
@@ -469,6 +593,28 @@ function ReportTable({ title, rows }) {
   )
 }
 
+function HotelPerformance({ rows }) {
+  return (
+    <section className="rounded-lg border border-stone-200 bg-white p-4 shadow-soft">
+      <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+        <SectionTitle icon={Activity} title="Hotel performance" />
+        <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-stone-400">Live report</p>
+      </div>
+      <div className="mt-3 grid overflow-hidden rounded-md border border-stone-100 md:grid-cols-2 xl:grid-cols-4">
+        {rows.map(({ icon: Icon, label, value }) => (
+          <div key={label} className="flex min-h-14 items-center justify-between gap-4 border-b border-stone-100 px-3 py-2 last:border-b-0 md:[&:nth-last-child(-n+2)]:border-b-0 xl:[&:nth-last-child(-n+4)]:border-b-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-stone-100 text-amberline"><Icon size={16} /></span>
+              <p className="min-w-0 truncate text-sm font-bold text-stone-600">{label}</p>
+            </div>
+            <p className="shrink-0 text-right text-base font-extrabold text-charcoal">{value}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function FormBlock({ title, children }) {
   return (
     <fieldset className="grid gap-4 rounded-lg border border-stone-200 p-4 md:grid-cols-2">
@@ -478,13 +624,75 @@ function FormBlock({ title, children }) {
   )
 }
 
-function UploadField({ label, value, multiple, onFile }) {
+function ActivitiesPage({ activities, loading, onBack }) {
+  return (
+    <FadeIn className="mt-6 rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
+      <div className="mb-5 flex flex-col justify-between gap-3 md:flex-row md:items-center">
+        <div>
+          <p className="eyebrow">Activity monitor</p>
+          <h2 className="mt-1 text-4xl font-semibold">Hotel admin activities</h2>
+          <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-stone-600">Recent admin actions are cached for the super-admin console and mirrored in this browser for quick review.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button className="btn-secondary" type="button" onClick={() => exportActivities(activities)}><Download size={18} /> Export CSV</button>
+          <button className="btn-secondary" type="button" onClick={onBack}><ArrowLeft size={18} /> Back</button>
+        </div>
+      </div>
+      {loading ? <p className="rounded-md bg-bone p-4 text-sm font-semibold text-stone-600">Loading activities...</p> : null}
+      <div className="grid gap-3">
+        {activities.map((activity) => (
+          <article key={activity.id} className="grid gap-3 rounded-md border border-stone-200 bg-stone-50 p-4 md:grid-cols-[1fr_190px_180px] md:items-center">
+            <div>
+              <p className="font-extrabold text-charcoal">{formatAction(activity.action)}</p>
+              <p className="mt-1 text-sm font-semibold text-stone-600">{activity.actorEmail || 'Unknown admin'} / {activity.hotelName || 'Platform'}</p>
+            </div>
+            <p className="text-sm font-bold text-stone-500">{activity.entityType}</p>
+            <p className="text-sm font-bold text-stone-500">{formatDateTime(activity.createdAt)}</p>
+          </article>
+        ))}
+        {!activities.length && !loading ? <p className="rounded-md bg-bone p-6 text-center text-sm font-semibold text-stone-500">No admin activities captured yet.</p> : null}
+      </div>
+    </FadeIn>
+  )
+}
+
+function MediaList({ items, singular, onRemove }) {
+  if (!items.length) return null
+  return (
+    <div className="grid gap-2">
+      {items.map((item, index) => (
+        <div key={`${item.url || item}-${index}`} className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-stone-200 bg-stone-50 px-3 py-2">
+          <div className="min-w-0">
+            <p className="text-sm font-extrabold text-charcoal">{capitalize(singular)} {items.length > 1 ? index + 1 : ''}</p>
+            <p className="truncate text-xs font-semibold text-stone-500">{item.alt || getFileName(item.url || item) || 'Uploaded to Cloudinary'}</p>
+          </div>
+          <button type="button" title={`Remove ${singular}`} onClick={() => onRemove(index)} className="btn-secondary !min-h-9 shrink-0 !px-3 text-red-700">
+            Remove
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function UploadField({ label, value, multiple, disabled = false, onFile, onFiles }) {
   return (
     <label>
       <span className="label">{label}</span>
-      <div className="flex min-h-12 items-center gap-3 rounded-md border border-stone-300 bg-white px-3">
+      <div className={`flex min-h-12 items-center gap-3 rounded-md border border-stone-300 bg-white px-3 ${disabled ? 'opacity-55' : ''}`}>
         <ImagePlus size={18} className="text-amberline" />
-        <input className="min-w-0 flex-1 text-sm" type="file" accept="image/*" multiple={multiple} onChange={(event) => onFile(event.target.files?.[0])} />
+        <input
+          className="min-w-0 flex-1 text-sm"
+          type="file"
+          accept="image/*"
+          multiple={multiple}
+          disabled={disabled}
+          onChange={(event) => {
+            if (onFiles) onFiles(event.target.files)
+            else onFile?.(event.target.files?.[0])
+            event.target.value = ''
+          }}
+        />
       </div>
       {value ? <p className="mt-2 truncate text-xs font-semibold text-stone-500">{value}</p> : null}
     </label>
@@ -493,10 +701,12 @@ function UploadField({ label, value, multiple, onFile }) {
 
 function Metric({ icon: Icon, label, value }) {
   return (
-    <div className="metric-card">
-      <span className="icon-tile"><Icon size={20} /></span>
-      <p className="mt-4 text-2xl font-extrabold">{value}</p>
-      <p className="mt-1 text-xs font-bold uppercase tracking-[0.12em] text-stone-500">{label}</p>
+    <div className="rounded-lg border border-stone-200 bg-white p-3 shadow-soft">
+      <div className="flex items-center gap-2">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-amberline text-white"><Icon size={16} /></span>
+        <p className="min-w-0 truncate text-xs font-bold uppercase tracking-[0.08em] text-stone-500">{label}</p>
+      </div>
+      <p className="mt-2 truncate text-lg font-extrabold leading-tight text-charcoal sm:text-xl">{value}</p>
     </div>
   )
 }
@@ -528,34 +738,45 @@ function BedIcon(props) {
 }
 
 function toHotelPayload(form) {
+  const phones = splitList(form.phones)
+  const heroImages = form.heroImages.slice(0, 3)
+  const showcaseImages = form.showcaseImages.slice(0, 3)
+  const gallery = form.gallery.slice(0, 5)
   return {
     name: form.name,
     slug: form.slug,
     subdomain: form.subdomain,
     legalName: form.legalName || undefined,
-    customDomain: form.customDomain || undefined,
     description: form.description,
     address: { line1: form.line1, city: form.city, state: form.state, country: form.country },
     contact: {
       email: form.email,
-      web3formsAccessKey: form.web3formsAccessKey,
-      phones: splitList(form.phones),
-      phone: splitList(form.phones)[0] || '',
+      phones,
+      phone: phones[0] || '',
       whatsapp: form.whatsapp,
-      social: { instagram: form.instagram, facebook: form.facebook },
+      social: {
+        instagram: form.instagram,
+        facebook: form.facebook,
+        linkedin: form.linkedin,
+        twitter: form.twitter,
+      },
     },
     policies: { checkIn: form.checkIn, checkOut: form.checkOut, cancellation: 'Configured by hotel admin.' },
-    amenities: splitList(form.amenities),
     branding: {
       logoText: form.name,
       logoUrl: form.logoUrl,
-      showcaseImageUrl: form.showcaseImageUrl,
+      logoPublicId: form.logoPublicId,
+      heroImages,
+      showcaseImages,
+      showcaseImageUrl: showcaseImages[0]?.url || '',
+      diningImage: form.diningImage,
+      diningImageUrl: form.diningImage?.url || '',
       youtubeEmbedUrl: form.youtubeEmbedUrl,
-      gallery: form.gallery,
+      gallery,
       accent: '#7f1d1d',
       tone: 'Independent luxury hotel',
     },
-    heroImageUrl: form.heroImageUrl || undefined,
+    heroImageUrl: heroImages[0]?.url || '',
   }
 }
 
@@ -566,27 +787,110 @@ function toHotelForm(hotel) {
     legalName: hotel.legal_name || '',
     slug: hotel.slug || '',
     subdomain: hotel.subdomain || '',
-    customDomain: hotel.custom_domain || '',
     description: hotel.description || '',
     line1: hotel.address?.line1 || '',
     city: hotel.address?.city || '',
     state: hotel.address?.state || '',
     country: hotel.address?.country || 'India',
     email: hotel.contact?.email || '',
-    web3formsAccessKey: hotel.contact?.web3formsAccessKey || '',
     phones: (hotel.contact?.phones || [hotel.contact?.phone].filter(Boolean)).join(', '),
     whatsapp: hotel.contact?.whatsapp || '',
     instagram: hotel.contact?.social?.instagram || '',
     facebook: hotel.contact?.social?.facebook || '',
+    linkedin: hotel.contact?.social?.linkedin || '',
+    twitter: hotel.contact?.social?.twitter || hotel.contact?.social?.x || '',
     checkIn: hotel.policies?.checkIn || '14:00',
     checkOut: hotel.policies?.checkOut || '11:00',
-    amenities: (hotel.amenities || []).join(', '),
     logoUrl: hotel.branding?.logoUrl || '',
+    logoPublicId: hotel.branding?.logoPublicId || '',
     heroImageUrl: hotel.hero_image_url || '',
-    showcaseImageUrl: hotel.branding?.showcaseImageUrl || '',
+    heroImages: normalizeMediaItems(hotel.branding?.heroImages || [hotel.hero_image_url].filter(Boolean)),
+    showcaseImages: normalizeMediaItems(hotel.branding?.showcaseImages || [hotel.branding?.showcaseImageUrl].filter(Boolean)).slice(0, 3),
+    diningImage: normalizeMediaItems([hotel.branding?.diningImage || hotel.branding?.diningImageUrl].filter(Boolean))[0] || null,
     youtubeEmbedUrl: hotel.branding?.youtubeEmbedUrl || '',
-    gallery: hotel.branding?.gallery || [],
+    gallery: normalizeMediaItems(hotel.branding?.gallery || []).slice(0, 5),
   }
+}
+
+function normalizeMediaItems(items) {
+  return (items || [])
+    .map((item) => (typeof item === 'string' ? { url: item, publicId: '', alt: '' } : { url: item.url || item.secureUrl || '', publicId: item.publicId || item.cloudinaryPublicId || '', alt: item.alt || '' }))
+    .filter((item) => item.url)
+}
+
+function readActivityArchive() {
+  try {
+    return JSON.parse(window.localStorage.getItem(activityArchiveKey) || '[]')
+  } catch {
+    return []
+  }
+}
+
+function writeActivityArchive(activities) {
+  try {
+    window.localStorage.setItem(activityArchiveKey, JSON.stringify(activities.slice(0, 500)))
+  } catch {
+    // Local storage may be unavailable in private browsing.
+  }
+}
+
+function mergeActivities(primary, secondary) {
+  const seen = new Set()
+  return [...primary, ...secondary].filter((activity) => {
+    if (!activity?.id || seen.has(activity.id)) return false
+    seen.add(activity.id)
+    return true
+  }).slice(0, 500)
+}
+
+function exportActivities(activities) {
+  const header = ['Date', 'Hotel', 'Admin', 'Action', 'Entity']
+  const rows = activities.map((activity) => [
+    formatDateTime(activity.createdAt),
+    activity.hotelName || '',
+    activity.actorEmail || '',
+    formatAction(activity.action),
+    activity.entityType || '',
+  ])
+  const csv = [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\n')
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `hotel-activities-${new Date().toISOString().slice(0, 10)}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function csvCell(value) {
+  return `"${String(value || '').replace(/"/g, '""')}"`
+}
+
+function formatAction(value) {
+  return String(value || 'activity').replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function capitalize(value) {
+  return String(value || '').replace(/^\w/, (letter) => letter.toUpperCase())
+}
+
+function getFileName(value) {
+  try {
+    const path = new URL(value).pathname
+    return decodeURIComponent(path.split('/').filter(Boolean).pop() || '')
+  } catch {
+    return String(value || '').split('/').filter(Boolean).pop() || ''
+  }
+}
+
+function formatDateTime(value) {
+  if (!value) return '-'
+  return new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
 }
 
 function splitList(value) {

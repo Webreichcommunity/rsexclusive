@@ -22,7 +22,7 @@ export async function optionalTenant(req, _res, next) {
 
   const { rows } = await query(
     `SELECT * FROM hotels
-     WHERE status = 'active' AND (subdomain = $1 OR slug = $1 OR custom_domain = $1)
+     WHERE subdomain = $1 OR slug = $1 OR custom_domain = $1
      LIMIT 1`,
     [tenantKey],
   )

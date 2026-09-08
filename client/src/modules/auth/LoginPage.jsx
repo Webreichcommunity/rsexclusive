@@ -1,7 +1,8 @@
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { CheckCircle2, KeyRound, Loader2, LogIn, Mail, RotateCcw, UserPlus } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { FadeIn } from '../../components/ui/Motion.jsx'
+import { GuideToast } from '../../components/ui/GuideToast.jsx'
 import {
   loginWithEmail,
   loginWithGoogle,
@@ -21,19 +22,32 @@ export function LoginPage() {
   const location = useLocation()
   const [params] = useSearchParams()
   const returnTo = params.get('returnTo')
-  const consoleReturnTo = returnTo && (returnTo.startsWith('/admin') || returnTo.startsWith('/super-admin'))
   const tenantMode = resolveTenantFromLocation()
+  const returnToPath = String(returnTo || '').split('?')[0]
+  const bookingReturnTo = stripTenantFromPath(returnToPath, tenantMode).startsWith('/book')
+  const consoleReturnTo = returnTo && (returnTo.startsWith('/admin') || returnTo.startsWith('/super-admin'))
   const appPath = stripTenantFromPath(location.pathname, tenantMode)
   const isAdminLogin = appPath.startsWith('/admin/login') || params.get('role') === 'admin' || Boolean(consoleReturnTo)
   const requestedMode = params.get('mode')
-  const initialMode = isAdminLogin ? (requestedMode === 'forgot' ? 'forgot' : 'login') : requestedMode === 'register' ? 'register' : 'login'
+  const initialMode = isAdminLogin ? (requestedMode === 'forgot' ? 'forgot' : 'login') : requestedMode === 'register' || bookingReturnTo ? 'register' : 'login'
   const [mode, setMode] = useState(initialMode)
+  const [showEmailRegister, setShowEmailRegister] = useState(initialMode !== 'register')
   const [form, setForm] = useState({ fullName: '', email: '', phone: '', password: '' })
   const [pendingProfile, setPendingProfile] = useState(null)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
+  const [guideToast, setGuideToast] = useState(null)
+  const guideToastTimer = useRef(null)
   const [loading, setLoading] = useState(false)
   const { firebaseUser, isAuthenticated, loading: authLoading } = useAuth()
+
+  useEffect(() => () => window.clearTimeout(guideToastTimer.current), [])
+
+  function showGuideToast(title, message, tone = 'warning') {
+    window.clearTimeout(guideToastTimer.current)
+    setGuideToast({ id: `${Date.now()}-${title}`, title, message, tone })
+    guideToastTimer.current = window.setTimeout(() => setGuideToast(null), 3000)
+  }
 
   function savePendingProfile(profile) {
     setPendingProfile(profile)
@@ -117,6 +131,7 @@ export function LoginPage() {
     setInfo('')
     if (!form.email) {
       setError('Enter your email address first.')
+      showGuideToast('Email required', 'Enter your email address so we can send the reset link.')
       return
     }
     setLoading(true)
@@ -210,6 +225,9 @@ export function LoginPage() {
     }
   }, [authLoading, isAuthenticated, firebaseUser, isAdminLogin, mode, redirectByRole])
 
+  const showRegisterProfileFields = !isAdminLogin && mode === 'register' && showEmailRegister
+  const showCredentialFields = mode !== 'verify' && (isAdminLogin || mode !== 'register' || showEmailRegister)
+
   const title = isAdminLogin
     ? mode === 'forgot'
       ? 'Reset staff password.'
@@ -227,6 +245,7 @@ export function LoginPage() {
 
   return (
     <main className="relative overflow-hidden bg-white">
+      <GuideToast toast={guideToast} />
       <section className="container-page grid min-h-[calc(100svh-72px)] items-center gap-8 py-10 lg:grid-cols-[minmax(0,1fr)_440px] lg:py-14">
         <FadeIn viewport={false} as="section" className="relative overflow-hidden rounded-lg bg-charcoal p-6 text-white shadow-panel sm:p-8 lg:min-h-[620px]">
           <img src="https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1600&q=80" alt="" className="absolute inset-0 h-full w-full object-cover opacity-70" aria-hidden="true" />
@@ -253,6 +272,15 @@ export function LoginPage() {
             </button>
           ) : null}
 
+          {!isAdminLogin && mode === 'register' && !showEmailRegister ? (
+            <div className="mt-5 rounded-lg border border-mist bg-white/82 p-3 text-center shadow-sm">
+              <p className="text-xs font-semibold leading-5 text-stone-600">Prefer email and password?</p>
+              <button type="button" className="mt-2 text-sm font-black text-amberline underline-offset-4 hover:underline" onClick={() => { setError(''); setInfo(''); setShowEmailRegister(true) }}>
+                Use email instead
+              </button>
+            </div>
+          ) : null}
+
           {mode === 'verify' ? (
             <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
               <p className="flex items-center gap-2 text-lg font-extrabold text-amber-950"><Mail size={20} /> Check your email</p>
@@ -268,14 +296,14 @@ export function LoginPage() {
             </div>
           ) : null}
 
-          {!isAdminLogin && mode === 'register' ? (
+          {showRegisterProfileFields ? (
             <div className="mt-5 grid gap-4">
               <Field label="Full name"><input className="input" value={form.fullName} onChange={(event) => setForm({ ...form, fullName: event.target.value })} required /></Field>
               <Field label="Phone"><input className="input" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></Field>
             </div>
           ) : null}
 
-          {mode !== 'verify' ? (
+          {showCredentialFields ? (
             <>
               <div className={`${!isAdminLogin ? 'mt-5 border-t border-mist pt-5' : 'mt-5'} grid gap-4`}>
                 <Field label="Email"><input id="email" className="input" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} type="email" required /></Field>
@@ -293,8 +321,8 @@ export function LoginPage() {
 
           {isAdminLogin && mode === 'login' ? <button type="button" className="mt-4 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setMode('forgot') }}>Forgot password?</button> : null}
           {isAdminLogin && mode !== 'login' ? <button type="button" className="mt-4 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setMode('login') }}>Back to staff sign in</button> : null}
-          {!isAdminLogin && mode === 'login' ? <button type="button" className="mt-5 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setMode('register') }}><KeyRound className="mr-1 inline" size={15} /> New here? Create group account</button> : null}
-          {!isAdminLogin && mode === 'register' ? <button type="button" className="mt-5 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setMode('login') }}>Already registered? Sign in</button> : null}
+          {!isAdminLogin && mode === 'login' ? <button type="button" className="mt-5 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setShowEmailRegister(false); setMode('register') }}><KeyRound className="mr-1 inline" size={15} /> New here? Create group account</button> : null}
+          {!isAdminLogin && mode === 'register' ? <button type="button" className="mt-5 block w-full text-center text-sm font-semibold text-stone-600 hover:text-charcoal" onClick={() => { setError(''); setInfo(''); setShowEmailRegister(true); setMode('login') }}>Already registered? Sign in</button> : null}
           <Link to={buildTenantPath('/', tenantMode)} className="mt-3 block text-center text-sm font-semibold text-stone-600 hover:text-charcoal">Return to hotel</Link>
         </FadeIn>
       </section>

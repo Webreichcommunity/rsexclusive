@@ -1,13 +1,22 @@
+import { v2 as cloudinary } from 'cloudinary'
 import { z } from 'zod'
+import { env } from '../config/env.js'
 import { authenticate, requireHotelAdmin, requireRole } from '../middleware/auth.js'
 import { requireTenant } from '../middleware/tenant.js'
 import { validate } from '../middleware/validate.js'
 import { query, transaction } from '../db/pool.js'
 import { deleteFirebaseUser } from '../services/firebaseAdminService.js'
+import { recordActivity } from '../services/activityService.js'
 import { createAsyncRouter } from '../utils/asyncRouter.js'
 import { badRequest, conflict, notFound } from '../utils/errors.js'
 
 export const adminRoutes = createAsyncRouter()
+
+cloudinary.config({
+  cloud_name: env.cloudinary.cloudName,
+  api_key: env.cloudinary.apiKey,
+  api_secret: env.cloudinary.apiSecret,
+})
 
 const roomTypeSchema = z.object({
   name: z.string().min(2),
@@ -25,7 +34,7 @@ const roomTypeSchema = z.object({
     name: z.string().min(1),
     price: z.coerce.number().nonnegative().default(0),
   })).default([]),
-  heroImageUrl: z.string().url().optional(),
+  heroImageUrl: z.string().url().or(z.literal('')).optional(),
   gallery: z.array(z.object({
     url: z.string().url(),
     alt: z.string().optional(),
@@ -93,7 +102,7 @@ const offerSchema = z.object({
   startsAt: z.coerce.date(),
   endsAt: z.coerce.date(),
   active: z.coerce.boolean().default(true),
-  imageUrl: z.string().url().optional(),
+  imageUrl: z.string().url().or(z.literal('')).optional(),
   audienceType: z.enum(['general', 'repeat_guest']).default('general'),
   minCompletedBookings: z.coerce.number().int().min(0).default(0),
   badge: z.string().max(40).optional(),
@@ -119,6 +128,13 @@ async function assertHomepageRoomLimit(db, hotelId, roomTypeId, showOnHomepage) 
 }
 
 adminRoutes.get('/dashboard', async (req, res) => {
+  recordActivity({
+    req,
+    action: 'admin_panel_opened',
+    entityType: 'hotel',
+    entityId: req.hotel.id,
+    metadata: { page: 'dashboard' },
+  })
   const { rows } = await query(
     `SELECT
        count(*) FILTER (WHERE status = 'confirmed')::int AS confirmed_bookings,
@@ -233,6 +249,13 @@ adminRoutes.post('/bookings', requireRole('hotel_admin', 'super_admin'), validat
   })
 
   res.status(201).json({ booking })
+  recordActivity({
+    req,
+    action: 'booking_created',
+    entityType: 'booking',
+    entityId: booking.id,
+    metadata: { reference: booking.booking_reference, source: 'manual_admin' },
+  })
 })
 
 adminRoutes.get('/users', async (req, res) => {
@@ -372,6 +395,13 @@ adminRoutes.delete('/users/:userId', requireRole('hotel_admin', 'super_admin'), 
     await db.query('DELETE FROM users WHERE id = $1', [req.params.userId])
   })
   res.status(204).send()
+  recordActivity({
+    req,
+    action: 'customer_deleted',
+    entityType: 'user',
+    entityId: req.params.userId,
+    metadata: { email: user.email },
+  })
 })
 
 adminRoutes.patch('/bookings/:bookingId', requireRole('hotel_admin', 'super_admin'), validate(bookingUpdateSchema), async (req, res) => {
@@ -403,6 +433,13 @@ adminRoutes.patch('/bookings/:bookingId', requireRole('hotel_admin', 'super_admi
   )
   if (!rows[0]) throw notFound('Booking not found')
   res.json({ booking: rows[0] })
+  recordActivity({
+    req,
+    action: 'booking_updated',
+    entityType: 'booking',
+    entityId: rows[0].id,
+    metadata: { reference: rows[0].booking_reference },
+  })
 })
 
 adminRoutes.delete('/bookings/:bookingId', requireRole('hotel_admin', 'super_admin'), async (req, res) => {
@@ -434,6 +471,12 @@ adminRoutes.delete('/bookings/:bookingId', requireRole('hotel_admin', 'super_adm
   })
 
   res.status(204).send()
+  recordActivity({
+    req,
+    action: 'booking_deleted',
+    entityType: 'booking',
+    entityId: req.params.bookingId,
+  })
 })
 
 adminRoutes.get('/rooms', async (req, res) => {
@@ -511,15 +554,28 @@ adminRoutes.post('/rooms', requireRole('hotel_admin', 'super_admin'), validate(r
     return roomType
   })
 
+  await recordMediaAssets(req.hotel.id, 'room_type', room.id, collectRoomMedia(room), room.name)
   res.status(201).json({ room })
+  recordActivity({
+    req,
+    action: 'room_created',
+    entityType: 'room_type',
+    entityId: room.id,
+    metadata: { name: room.name },
+  })
 })
 
 adminRoutes.patch('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'), validate(roomUpdateSchema), async (req, res) => {
   const body = req.body
-  const room = await transaction(async (db) => {
+  const result = await transaction(async (db) => {
     if (body.showOnHomepage !== undefined) {
       await assertHomepageRoomLimit(db, req.hotel.id, req.params.roomTypeId, body.showOnHomepage)
     }
+    const { rows: previousRows } = await db.query(
+      'SELECT * FROM room_types WHERE id = $1 AND hotel_id = $2 FOR UPDATE',
+      [req.params.roomTypeId, req.hotel.id],
+    )
+    if (!previousRows[0]) throw notFound('Room category not found')
     const { rows } = await db.query(
       `UPDATE room_types SET
          name = coalesce($1, name),
@@ -533,7 +589,7 @@ adminRoutes.patch('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'
          bed_type = coalesce($9, bed_type),
          amenities = coalesce($10::text[], amenities),
          amenity_items = coalesce($11::jsonb, amenity_items),
-         hero_image_url = coalesce($12, hero_image_url),
+         hero_image_url = CASE WHEN $12::text IS NULL THEN hero_image_url ELSE nullif($12, '') END,
          gallery = coalesce($13::jsonb, gallery),
          show_on_homepage = coalesce($14::boolean, show_on_homepage),
          active = coalesce($15::boolean, active),
@@ -561,10 +617,23 @@ adminRoutes.patch('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'
       ],
     )
     if (!rows[0]) throw notFound('Room category not found')
-    return rows[0]
+    return { previousRoom: previousRows[0], room: rows[0] }
   })
+  const { previousRoom, room } = result
+
+  const previousMedia = collectRoomMedia(previousRoom)
+  const nextMedia = collectRoomMedia(room)
+  await syncRemovedCloudinaryMedia(req.hotel.id, previousMedia, nextMedia)
+  await recordMediaAssets(req.hotel.id, 'room_type', room.id, nextMedia, room.name)
 
   res.json({ room })
+  recordActivity({
+    req,
+    action: 'room_updated',
+    entityType: 'room_type',
+    entityId: room.id,
+    metadata: { name: room.name },
+  })
 })
 
 adminRoutes.delete('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'), async (req, res) => {
@@ -575,6 +644,12 @@ adminRoutes.delete('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin
   )
   if (!rowCount) throw notFound('Room category not found')
   res.status(204).send()
+  recordActivity({
+    req,
+    action: 'room_hidden',
+    entityType: 'room_type',
+    entityId: req.params.roomTypeId,
+  })
 })
 
 adminRoutes.patch('/rooms/:roomTypeId/homepage', requireRole('hotel_admin', 'super_admin'), validate(roomFeatureSchema), async (req, res) => {
@@ -596,6 +671,13 @@ adminRoutes.patch('/rooms/:roomTypeId/homepage', requireRole('hotel_admin', 'sup
   })
 
   res.json({ room })
+  recordActivity({
+    req,
+    action: req.body.showOnHomepage ? 'room_featured' : 'room_unfeatured',
+    entityType: 'room_type',
+    entityId: room.id,
+    metadata: { showOnHomepage: req.body.showOnHomepage },
+  })
 })
 
 adminRoutes.patch('/rooms/:roomTypeId/inventory', requireRole('hotel_admin', 'super_admin'), validate(inventorySchema), async (req, res) => {
@@ -635,6 +717,13 @@ adminRoutes.patch('/rooms/:roomTypeId/inventory', requireRole('hotel_admin', 'su
   )
 
   res.json({ updatedDays: rowCount })
+  recordActivity({
+    req,
+    action: 'inventory_updated',
+    entityType: 'room_type',
+    entityId: req.params.roomTypeId,
+    metadata: { startDate, endDate, updatedDays: rowCount },
+  })
 })
 
 adminRoutes.get('/payments', async (req, res) => {
@@ -674,6 +763,13 @@ adminRoutes.post('/amenities', requireRole('hotel_admin', 'super_admin'), valida
     [req.hotel.id, req.body.name, req.body.description || '', req.body.price, req.body.icon || 'sparkles', req.body.active],
   )
   res.status(201).json({ amenity: rows[0] })
+  recordActivity({
+    req,
+    action: 'amenity_saved',
+    entityType: 'amenity',
+    entityId: rows[0].id,
+    metadata: { name: rows[0].name },
+  })
 })
 
 adminRoutes.patch('/amenities/:amenityId', requireRole('hotel_admin', 'super_admin'), validate(amenitySchema.partial()), async (req, res) => {
@@ -691,12 +787,25 @@ adminRoutes.patch('/amenities/:amenityId', requireRole('hotel_admin', 'super_adm
   )
   if (!rows[0]) throw notFound('Amenity not found')
   res.json({ amenity: rows[0] })
+  recordActivity({
+    req,
+    action: 'amenity_updated',
+    entityType: 'amenity',
+    entityId: rows[0].id,
+    metadata: { name: rows[0].name },
+  })
 })
 
 adminRoutes.delete('/amenities/:amenityId', requireRole('hotel_admin', 'super_admin'), async (req, res) => {
   const { rowCount } = await query('DELETE FROM hotel_amenities WHERE id = $1 AND hotel_id = $2', [req.params.amenityId, req.hotel.id])
   if (!rowCount) throw notFound('Amenity not found')
   res.status(204).send()
+  recordActivity({
+    req,
+    action: 'amenity_deleted',
+    entityType: 'amenity',
+    entityId: req.params.amenityId,
+  })
 })
 
 adminRoutes.get('/offers', async (req, res) => {
@@ -736,53 +845,213 @@ adminRoutes.post('/offers', requireRole('hotel_admin', 'super_admin'), validate(
       req.body.highlightColor || '#f59e0b',
     ],
   )
+  await recordMediaAssets(req.hotel.id, 'offer', rows[0].id, collectOfferMedia(rows[0]), rows[0].title)
   res.status(201).json({ offer: rows[0] })
+  recordActivity({
+    req,
+    action: 'offer_created',
+    entityType: 'offer',
+    entityId: rows[0].id,
+    metadata: { title: rows[0].title },
+  })
 })
 
 adminRoutes.patch('/offers/:offerId', requireRole('hotel_admin', 'super_admin'), validate(offerSchema.partial()), async (req, res) => {
   const body = req.body
-  const { rows } = await query(
-    `UPDATE offers SET
-       title = coalesce($1, title),
-       description = coalesce($2, description),
-       code = coalesce($3, code),
-       discount_type = coalesce($4, discount_type),
-       discount_value = coalesce($5::numeric, discount_value),
-       starts_at = coalesce($6::timestamptz, starts_at),
-       ends_at = coalesce($7::timestamptz, ends_at),
-       active = coalesce($8::boolean, active),
-       image_url = coalesce($9, image_url),
-       audience_type = coalesce($10, audience_type),
-       min_completed_bookings = coalesce($11::int, min_completed_bookings),
-       badge = coalesce($12, badge),
-       highlight_color = coalesce($13, highlight_color),
-       updated_at = now()
-     WHERE id = $14 AND hotel_id = $15
-     RETURNING *`,
-    [
-      body.title,
-      body.description,
-      body.code,
-      body.discountType,
-      body.discountValue,
-      body.startsAt,
-      body.endsAt,
-      body.active,
-      body.imageUrl,
-      body.audienceType,
-      body.minCompletedBookings,
-      body.badge,
-      body.highlightColor,
-      req.params.offerId,
-      req.hotel.id,
-    ],
-  )
-  if (!rows[0]) throw notFound('Offer not found')
-  res.json({ offer: rows[0] })
+  const result = await transaction(async (db) => {
+    const { rows: previousRows } = await db.query(
+      'SELECT * FROM offers WHERE id = $1 AND hotel_id = $2 FOR UPDATE',
+      [req.params.offerId, req.hotel.id],
+    )
+    if (!previousRows[0]) throw notFound('Offer not found')
+    const { rows } = await db.query(
+      `UPDATE offers SET
+         title = coalesce($1, title),
+         description = coalesce($2, description),
+         code = coalesce($3, code),
+         discount_type = coalesce($4, discount_type),
+         discount_value = coalesce($5::numeric, discount_value),
+         starts_at = coalesce($6::timestamptz, starts_at),
+         ends_at = coalesce($7::timestamptz, ends_at),
+         active = coalesce($8::boolean, active),
+         image_url = CASE WHEN $9::text IS NULL THEN image_url ELSE nullif($9, '') END,
+         audience_type = coalesce($10, audience_type),
+         min_completed_bookings = coalesce($11::int, min_completed_bookings),
+         badge = coalesce($12, badge),
+         highlight_color = coalesce($13, highlight_color),
+         updated_at = now()
+       WHERE id = $14 AND hotel_id = $15
+       RETURNING *`,
+      [
+        body.title,
+        body.description,
+        body.code,
+        body.discountType,
+        body.discountValue,
+        body.startsAt,
+        body.endsAt,
+        body.active,
+        body.imageUrl,
+        body.audienceType,
+        body.minCompletedBookings,
+        body.badge,
+        body.highlightColor,
+        req.params.offerId,
+        req.hotel.id,
+      ],
+    )
+    if (!rows[0]) throw notFound('Offer not found')
+    return { previousOffer: previousRows[0], offer: rows[0] }
+  })
+  const { previousOffer, offer } = result
+
+  const previousMedia = collectOfferMedia(previousOffer)
+  const nextMedia = collectOfferMedia(offer)
+  await syncRemovedCloudinaryMedia(req.hotel.id, previousMedia, nextMedia)
+  await recordMediaAssets(req.hotel.id, 'offer', offer.id, nextMedia, offer.title)
+
+  res.json({ offer })
+  recordActivity({
+    req,
+    action: 'offer_updated',
+    entityType: 'offer',
+    entityId: offer.id,
+    metadata: { title: offer.title },
+  })
 })
 
 adminRoutes.delete('/offers/:offerId', requireRole('hotel_admin', 'super_admin'), async (req, res) => {
+  const { rows: offerRows } = await query('SELECT * FROM offers WHERE id = $1 AND hotel_id = $2', [req.params.offerId, req.hotel.id])
+  if (!offerRows[0]) throw notFound('Offer not found')
   const { rowCount } = await query('DELETE FROM offers WHERE id = $1 AND hotel_id = $2', [req.params.offerId, req.hotel.id])
   if (!rowCount) throw notFound('Offer not found')
+  await destroyCloudinaryMedia(req.hotel.id, collectOfferMedia(offerRows[0]))
+  await query('DELETE FROM media_assets WHERE hotel_id = $1 AND entity_type = $2 AND entity_id = $3', [req.hotel.id, 'offer', req.params.offerId])
   res.status(204).send()
+  recordActivity({
+    req,
+    action: 'offer_deleted',
+    entityType: 'offer',
+    entityId: req.params.offerId,
+  })
 })
+
+async function recordMediaAssets(hotelId, entityType, entityId, items, fallbackAlt = '') {
+  for (const item of items.filter((media) => media.publicId && media.url)) {
+    await query(
+      `INSERT INTO media_assets (hotel_id, entity_type, entity_id, cloudinary_public_id, secure_url, alt_text, metadata)
+       SELECT $1, $2, $3, $4, $5, $6, $7::jsonb
+       WHERE NOT EXISTS (
+         SELECT 1 FROM media_assets WHERE hotel_id = $1 AND cloudinary_public_id = $4
+       )`,
+      [
+        hotelId,
+        entityType,
+        entityId,
+        item.publicId,
+        item.url,
+        item.alt || fallbackAlt || null,
+        JSON.stringify({ source: item.source }),
+      ],
+    )
+  }
+}
+
+async function syncRemovedCloudinaryMedia(hotelId, previousItems, nextItems) {
+  const nextPublicIds = new Set(nextItems.map((item) => item.publicId).filter(Boolean))
+  const removed = previousItems.filter((item) => item.publicId && !nextPublicIds.has(item.publicId))
+  await destroyCloudinaryMedia(hotelId, removed)
+}
+
+async function destroyCloudinaryMedia(hotelId, items) {
+  for (const item of items.filter((media) => media.publicId)) {
+    if (hotelId && await isCloudinaryPublicIdStillReferenced(hotelId, item.publicId)) continue
+    await destroyCloudinaryPublicId(item.publicId)
+    await query('DELETE FROM media_assets WHERE hotel_id = $1 AND cloudinary_public_id = $2', [hotelId, item.publicId])
+  }
+}
+
+async function destroyCloudinaryPublicId(publicId) {
+  if (!publicId || !env.cloudinary.cloudName || !env.cloudinary.apiKey || !env.cloudinary.apiSecret) return
+  try {
+    await cloudinary.uploader.destroy(publicId, { invalidate: true })
+  } catch (error) {
+    console.warn(`Cloudinary cleanup failed for ${publicId}: ${error.message}`)
+  }
+}
+
+function collectRoomMedia(roomOrPayload = {}) {
+  const items = []
+  addMediaItem(items, roomOrPayload.hero_image_url || roomOrPayload.heroImageUrl, 'roomHero')
+  for (const item of normalizeMediaList(roomOrPayload.gallery)) {
+    addMediaItem(items, item, 'roomGallery')
+  }
+  return uniqueMediaItems(items)
+}
+
+function collectOfferMedia(offerOrPayload = {}) {
+  const items = []
+  addMediaItem(items, offerOrPayload.image_url || offerOrPayload.imageUrl, 'offerImage')
+  return uniqueMediaItems(items)
+}
+
+function collectHotelMedia(hotelOrPayload = {}) {
+  const branding = hotelOrPayload.branding || {}
+  const items = []
+  addMediaItem(items, hotelOrPayload.hero_image_url || hotelOrPayload.heroImageUrl, 'hotelHero')
+  addMediaItem(items, branding.logoUrl, 'logo')
+  addMediaItem(items, branding.showcaseImageUrl, 'showcaseImage')
+  addMediaItem(items, branding.diningImageUrl, 'diningImage')
+  for (const item of normalizeMediaList(branding.heroImages)) addMediaItem(items, item, 'heroImages')
+  for (const item of normalizeMediaList(branding.showcaseImages)) addMediaItem(items, item, 'showcaseImages')
+  for (const item of normalizeMediaList(branding.gallery)) addMediaItem(items, item, 'gallery')
+  return uniqueMediaItems(items)
+}
+
+async function isCloudinaryPublicIdStillReferenced(hotelId, publicId) {
+  const [{ rows: hotelRows }, { rows: roomRows }, { rows: offerRows }] = await Promise.all([
+    query('SELECT hero_image_url, branding FROM hotels WHERE id = $1', [hotelId]),
+    query('SELECT hero_image_url, gallery FROM room_types WHERE hotel_id = $1', [hotelId]),
+    query('SELECT image_url FROM offers WHERE hotel_id = $1', [hotelId]),
+  ])
+  const references = [
+    ...hotelRows.flatMap((hotel) => collectHotelMedia(hotel)),
+    ...roomRows.flatMap((room) => collectRoomMedia(room)),
+    ...offerRows.flatMap((offer) => collectOfferMedia(offer)),
+  ]
+  return references.some((item) => item.publicId === publicId)
+}
+
+function normalizeMediaList(value) {
+  if (!Array.isArray(value)) return []
+  return value
+}
+
+function addMediaItem(items, value, source) {
+  if (!value) return
+  const url = typeof value === 'string' ? value : value.url || value.secureUrl
+  if (!url) return
+  const publicId = typeof value === 'string' ? extractCloudinaryPublicId(value) : value.publicId || value.cloudinaryPublicId || extractCloudinaryPublicId(url)
+  items.push({ url, publicId, alt: typeof value === 'string' ? '' : value.alt || value.altText || '', source })
+}
+
+function uniqueMediaItems(items) {
+  const seen = new Set()
+  return items.filter((item) => {
+    const key = item.publicId || item.url
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function extractCloudinaryPublicId(url) {
+  const raw = String(url || '')
+  const marker = '/upload/'
+  const markerIndex = raw.indexOf(marker)
+  if (markerIndex < 0) return ''
+  const afterUpload = raw.slice(markerIndex + marker.length).split(/[?#]/)[0]
+  const withoutTransforms = afterUpload.replace(/^((?:[a-z]_|ar_|bo_|co_|dpr_|e_|fl_|l_|r_|t_|u_)[^/]+\/)+/, '')
+  const withoutVersion = withoutTransforms.replace(/^v\d+\//, '')
+  return withoutVersion.replace(/\.[a-z0-9]+$/i, '')
+}

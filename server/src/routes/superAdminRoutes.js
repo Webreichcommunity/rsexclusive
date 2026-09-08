@@ -4,11 +4,13 @@ import { env } from '../config/env.js'
 import { authenticate, requireRole } from '../middleware/auth.js'
 import { validate } from '../middleware/validate.js'
 import { query, transaction } from '../db/pool.js'
-import { createOrUpdateFirebaseUser, deleteFirebaseUser } from '../services/firebaseAdminService.js'
+import { createOrUpdateFirebaseUser, deleteFirebaseUser, getFirebaseAuth } from '../services/firebaseAdminService.js'
+import { listActivities, recordActivity } from '../services/activityService.js'
 import { createAsyncRouter } from '../utils/asyncRouter.js'
-import { conflict, notFound } from '../utils/errors.js'
+import { conflict, forbidden, notFound } from '../utils/errors.js'
 
 export const superAdminRoutes = createAsyncRouter()
+const HOTEL_LIMIT = 3
 
 cloudinary.config({
   cloud_name: env.cloudinary.cloudName,
@@ -22,13 +24,13 @@ const hotelSchema = z.object({
   subdomain: z.string().min(2).regex(/^[a-z0-9-]+$/),
   description: z.string().min(10),
   legalName: z.string().optional(),
-  customDomain: z.string().optional(),
+  customDomain: z.string().nullable().optional(),
   address: z.record(z.any()).default({}),
   contact: z.record(z.any()).default({}),
   policies: z.record(z.any()).default({}),
   amenities: z.array(z.string()).default([]),
   branding: z.record(z.any()).default({}),
-  heroImageUrl: z.string().url().optional(),
+  heroImageUrl: z.string().url().or(z.literal('')).nullable().optional(),
   taxRate: z.coerce.number().min(0).max(30).default(12),
   currency: z.string().length(3).default('INR'),
   admin: z
@@ -60,6 +62,10 @@ const hotelAdminSchema = z.object({
 })
 
 const hotelUpdateSchema = hotelSchema.partial().omit({ admin: true })
+
+const hotelDeleteSchema = z.object({
+  reauthToken: z.string().min(20),
+})
 
 const mediaSignatureSchema = z.object({
   folder: z.string().min(2).max(80).default('hotel-assets'),
@@ -115,6 +121,10 @@ superAdminRoutes.get('/overview', async (_req, res) => {
      ORDER BY h.created_at DESC`,
   )
   res.json({ hotels: rows })
+})
+
+superAdminRoutes.get('/activities', async (req, res) => {
+  res.json({ activities: listActivities({ hotelId: req.query.hotelId, limit: req.query.limit || 300 }) })
 })
 
 superAdminRoutes.get('/hotels/:hotelId', async (req, res) => {
@@ -214,6 +224,10 @@ superAdminRoutes.post('/users', validate(platformUserSchema), async (req, res) =
 
 superAdminRoutes.post('/hotels', validate(hotelSchema), async (req, res) => {
   const body = req.body
+  const { rows: limitRows } = await query('SELECT count(*)::int AS count FROM hotels')
+  if (Number(limitRows[0]?.count || 0) >= HOTEL_LIMIT) {
+    throw conflict('Your plan includes 3 hotels. Contact WebReich to add another hotel.', 'hotel_limit_reached')
+  }
   const firebaseAdminUser = body.admin ? await createOrUpdateFirebaseUser(body.admin) : null
 
   const result = await transaction(async (db) => {
@@ -268,7 +282,18 @@ superAdminRoutes.post('/hotels', validate(hotelSchema), async (req, res) => {
       )
     }
 
+    await recordHotelMedia(db, hotel, body)
+
     return { hotel, admin: adminUser }
+  })
+
+  recordActivity({
+    req,
+    action: 'hotel_created',
+    entityType: 'hotel',
+    entityId: result.hotel.id,
+    hotel: result.hotel,
+    metadata: { name: result.hotel.name },
   })
 
   res.status(201).json(result)
@@ -276,6 +301,8 @@ superAdminRoutes.post('/hotels', validate(hotelSchema), async (req, res) => {
 
 superAdminRoutes.patch('/hotels/:hotelId', validate(hotelUpdateSchema), async (req, res) => {
   const body = req.body
+  const { rows: previousRows } = await query('SELECT * FROM hotels WHERE id = $1', [req.params.hotelId])
+  if (!previousRows[0]) throw notFound('Hotel not found')
   const { rows } = await query(
     `UPDATE hotels SET
       name = coalesce($1, name),
@@ -289,7 +316,7 @@ superAdminRoutes.patch('/hotels/:hotelId', validate(hotelUpdateSchema), async (r
       policies = coalesce($9::jsonb, policies),
       amenities = coalesce($10::text[], amenities),
       branding = coalesce($11::jsonb, branding),
-      hero_image_url = coalesce($12, hero_image_url),
+      hero_image_url = CASE WHEN $12::text IS NULL THEN hero_image_url ELSE nullif($12, '') END,
       tax_rate = coalesce($13::numeric, tax_rate),
       currency = coalesce($14::char(3), currency),
       updated_at = now()
@@ -314,6 +341,16 @@ superAdminRoutes.patch('/hotels/:hotelId', validate(hotelUpdateSchema), async (r
     ],
   )
   if (!rows[0]) throw notFound('Hotel not found')
+  await syncRemovedHotelMedia(previousRows[0], rows[0])
+  await recordHotelMedia({ query }, rows[0], body)
+  recordActivity({
+    req,
+    action: 'hotel_updated',
+    entityType: 'hotel',
+    entityId: rows[0].id,
+    hotel: rows[0],
+    metadata: { name: rows[0].name },
+  })
   res.json({ hotel: rows[0] })
 })
 
@@ -335,16 +372,46 @@ superAdminRoutes.patch('/hotels/:hotelId/status', validate(z.object({ status: z.
     `UPDATE hotels SET status = $1 WHERE id = $2 RETURNING *`,
     [req.body.status, req.params.hotelId],
   )
+  if (!rows[0]) throw notFound('Hotel not found')
+  recordActivity({
+    req,
+    action: req.body.status === 'inactive' ? 'hotel_suspended' : 'hotel_activated',
+    entityType: 'hotel',
+    entityId: rows[0].id,
+    hotel: rows[0],
+    metadata: { status: req.body.status },
+  })
   res.json({ hotel: rows[0] })
 })
 
-superAdminRoutes.delete('/hotels/:hotelId', async (req, res) => {
+superAdminRoutes.delete('/hotels/:hotelId', validate(hotelDeleteSchema), async (req, res) => {
+  const verified = await getFirebaseAuth().verifyIdToken(req.body.reauthToken, true)
+  if (verified.uid !== req.firebaseUser.uid || verified.email !== req.user.email) {
+    throw forbidden('Re-authenticate with the same super admin Google account before deleting this hotel.')
+  }
+  const provider = verified.firebase?.sign_in_provider || ''
+  const hasGoogleProvider = provider === 'google.com' || Boolean(verified.firebase?.identities?.['google.com'])
+  if (!hasGoogleProvider) {
+    throw forbidden('Hotel deletion requires Google re-authentication for the super admin account.')
+  }
+
+  const { rows: hotelRows } = await query('SELECT * FROM hotels WHERE id = $1', [req.params.hotelId])
+  if (!hotelRows[0]) throw notFound('Hotel not found')
   const { rows: bookingRows } = await query('SELECT count(*)::int AS count FROM bookings WHERE hotel_id = $1', [req.params.hotelId])
   if (bookingRows[0]?.count > 0) {
     throw conflict('Hotel has bookings. Deactivate it instead of deleting historical records.', 'hotel_has_bookings')
   }
+  await destroyHotelMedia(hotelRows[0])
   const { rowCount } = await query('DELETE FROM hotels WHERE id = $1', [req.params.hotelId])
   if (!rowCount) throw notFound('Hotel not found')
+  recordActivity({
+    req,
+    action: 'hotel_deleted',
+    entityType: 'hotel',
+    entityId: req.params.hotelId,
+    hotel: hotelRows[0],
+    metadata: { name: hotelRows[0].name },
+  })
   res.status(204).send()
 })
 
@@ -462,3 +529,113 @@ superAdminRoutes.get('/payments', async (_req, res) => {
   )
   res.json({ payments: rows })
 })
+
+async function recordHotelMedia(db, hotel, body = {}) {
+  const items = collectMediaItems({
+    heroImageUrl: body.heroImageUrl,
+    branding: body.branding || {},
+  }).filter((item) => item.publicId && item.url)
+
+  for (const item of items) {
+    await db.query(
+      `INSERT INTO media_assets (hotel_id, entity_type, cloudinary_public_id, secure_url, alt_text, metadata)
+       SELECT $1, 'hotel', $2, $3, $4, $5::jsonb
+       WHERE NOT EXISTS (
+         SELECT 1 FROM media_assets WHERE hotel_id = $1 AND cloudinary_public_id = $2
+       )`,
+      [hotel.id, item.publicId, item.url, item.alt || hotel.name, JSON.stringify({ source: item.source })],
+    )
+  }
+}
+
+async function syncRemovedHotelMedia(previousHotel, nextHotel) {
+  const previous = collectMediaItems(previousHotel)
+  const nextPublicIds = new Set(collectMediaItems(nextHotel).map((item) => item.publicId).filter(Boolean))
+  const removed = previous.filter((item) => item.publicId && !nextPublicIds.has(item.publicId))
+  for (const item of removed) {
+    if (await isCloudinaryPublicIdStillReferenced(previousHotel.id, item.publicId)) continue
+    await destroyCloudinaryPublicId(item.publicId)
+    await query('DELETE FROM media_assets WHERE hotel_id = $1 AND cloudinary_public_id = $2', [previousHotel.id, item.publicId])
+  }
+}
+
+async function destroyHotelMedia(hotel) {
+  const items = collectMediaItems(hotel).filter((item) => item.publicId)
+  for (const item of items) {
+    await destroyCloudinaryPublicId(item.publicId)
+  }
+  await query('DELETE FROM media_assets WHERE hotel_id = $1', [hotel.id])
+}
+
+async function destroyCloudinaryPublicId(publicId) {
+  if (!publicId || !env.cloudinary.cloudName || !env.cloudinary.apiKey || !env.cloudinary.apiSecret) return
+  try {
+    await cloudinary.uploader.destroy(publicId, { invalidate: true })
+  } catch (error) {
+    console.warn(`Cloudinary cleanup failed for ${publicId}: ${error.message}`)
+  }
+}
+
+function collectMediaItems(hotelOrPayload = {}) {
+  const branding = hotelOrPayload.branding || {}
+  const items = []
+  addMediaItem(items, hotelOrPayload.hero_image_url || hotelOrPayload.heroImageUrl, 'heroImageUrl')
+  addMediaItem(items, branding.logoUrl, 'logoUrl')
+  addMediaItem(items, branding.showcaseImageUrl, 'showcaseImageUrl')
+  addMediaItem(items, branding.diningImageUrl, 'diningImageUrl')
+  for (const item of normalizeMediaList(branding.heroImages)) addMediaItem(items, item, 'heroImages')
+  for (const item of normalizeMediaList(branding.showcaseImages)) addMediaItem(items, item, 'showcaseImages')
+  for (const item of normalizeMediaList(branding.gallery)) addMediaItem(items, item, 'gallery')
+  return items
+}
+
+function collectRoomMedia(roomOrPayload = {}) {
+  const items = []
+  addMediaItem(items, roomOrPayload.hero_image_url || roomOrPayload.heroImageUrl, 'roomHero')
+  for (const item of normalizeMediaList(roomOrPayload.gallery)) addMediaItem(items, item, 'roomGallery')
+  return items
+}
+
+function collectOfferMedia(offerOrPayload = {}) {
+  const items = []
+  addMediaItem(items, offerOrPayload.image_url || offerOrPayload.imageUrl, 'offerImage')
+  return items
+}
+
+async function isCloudinaryPublicIdStillReferenced(hotelId, publicId) {
+  const [{ rows: hotelRows }, { rows: roomRows }, { rows: offerRows }] = await Promise.all([
+    query('SELECT hero_image_url, branding FROM hotels WHERE id = $1', [hotelId]),
+    query('SELECT hero_image_url, gallery FROM room_types WHERE hotel_id = $1', [hotelId]),
+    query('SELECT image_url FROM offers WHERE hotel_id = $1', [hotelId]),
+  ])
+  const references = [
+    ...hotelRows.flatMap((hotel) => collectMediaItems(hotel)),
+    ...roomRows.flatMap((room) => collectRoomMedia(room)),
+    ...offerRows.flatMap((offer) => collectOfferMedia(offer)),
+  ]
+  return references.some((item) => item.publicId === publicId)
+}
+
+function normalizeMediaList(value) {
+  if (!Array.isArray(value)) return []
+  return value
+}
+
+function addMediaItem(items, value, source) {
+  if (!value) return
+  const url = typeof value === 'string' ? value : value.url || value.secureUrl
+  if (!url) return
+  const publicId = typeof value === 'string' ? extractCloudinaryPublicId(value) : value.publicId || value.cloudinaryPublicId || extractCloudinaryPublicId(url)
+  items.push({ url, publicId, alt: value.alt || '', source })
+}
+
+function extractCloudinaryPublicId(url) {
+  const raw = String(url || '')
+  const marker = '/upload/'
+  const markerIndex = raw.indexOf(marker)
+  if (markerIndex < 0) return ''
+  const afterUpload = raw.slice(markerIndex + marker.length).split(/[?#]/)[0]
+  const withoutTransforms = afterUpload.replace(/^((?:[a-z]_|ar_|bo_|co_|dpr_|e_|fl_|l_|r_|t_|u_)[^/]+\/)+/, '')
+  const withoutVersion = withoutTransforms.replace(/^v\d+\//, '')
+  return withoutVersion.replace(/\.[a-z0-9]+$/i, '')
+}

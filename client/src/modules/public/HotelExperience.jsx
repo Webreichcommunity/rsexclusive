@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import { FadeIn, Stagger, StaggerItem } from '../../components/ui/Motion.jsx'
 import { AutoScrollRow } from '../../components/ui/AutoScrollRow.jsx'
 import { LoadingState } from '../../components/ui/LoadingState.jsx'
@@ -46,17 +46,19 @@ export function HotelExperience() {
   if (loading) return <LoadingState label="Opening hotel" />
   if (error) return <TenantError error={error} />
 
-  const { hotel, rooms, offers = [], amenities = [] } = data
-  const heroImage = hotel.hero_image_url || fallbackHotelImage
+  const { hotel, rooms, amenities = [] } = data
+  const offers = data.offers || []
+  const heroImages = getMediaUrls(hotel.branding?.heroImages)
+  const showcaseImages = getMediaUrls(hotel.branding?.showcaseImages || [hotel.branding?.showcaseImageUrl].filter(Boolean)).slice(0, 3)
+  const heroImage = heroImages[0] || hotel.hero_image_url || fallbackHotelImage
   const featuredRoom = rooms[0]
   const bookingUrl = withTenantQuery(`/book?checkIn=${search.checkIn}&checkOut=${search.checkOut}&adults=${search.adults}&children=${search.children}&roomsCount=${search.roomsCount}`)
   const homepageRooms = rooms
-  const galleryImages = [
-    heroImage,
-    featuredRoom?.hero_image_url || fallbackRoomImage,
-    rooms[1]?.hero_image_url || loungeImage,
-    hotel.branding?.showcaseImageUrl || diningImage,
-  ]
+  const diningMediaImage = getMediaUrls([hotel.branding?.diningImage || hotel.branding?.diningImageUrl].filter(Boolean))[0] || diningImage
+  const galleryImages = getMediaUrls(hotel.branding?.gallery).slice(0, 5)
+  const visibleGalleryImages = galleryImages.length
+    ? galleryImages
+    : [heroImage, featuredRoom?.hero_image_url || fallbackRoomImage, rooms[1]?.hero_image_url || loungeImage, showcaseImages[0] || diningMediaImage]
 
   return (
     <main className="overflow-hidden bg-transparent">
@@ -78,14 +80,13 @@ export function HotelExperience() {
       <section id="hotel" className="relative -mt-[72px] min-h-[100svh] overflow-hidden pt-[72px]">
         <div className="container-page relative grid min-h-[calc(100svh-72px)] items-center gap-8 pb-10 pt-16 sm:pt-20 lg:grid-cols-[1fr_440px] lg:pt-16">
           <FadeIn viewport={false} className="max-w-3xl text-white">
-            <p className="inline-flex rounded-md bg-black/34 px-3 py-2 text-xs font-black uppercase tracking-[0.28em] text-amber-100 shadow-[0_12px_34px_rgba(0,0,0,0.55)] backdrop-blur-md">{hotel.branding?.tone || 'Independent luxury hotel'}</p>
-            <h1 className="mt-5 max-w-4xl text-5xl font-black leading-[0.98] text-white drop-shadow-[0_6px_26px_rgba(0,0,0,0.55)] md:text-7xl">
-              {hotel.name}
+            <h1 className="max-w-4xl text-5xl font-black leading-[0.98] text-white drop-shadow-[0_6px_26px_rgba(0,0,0,0.55)] md:text-7xl">
+              {cleanHotelName(hotel.name)}
             </h1>
-            <p className="mt-6 max-w-2xl text-base font-medium leading-8 text-white/88 md:text-lg">{hotel.description}</p>
+            <p className="mt-6 max-w-2xl text-base font-medium leading-8 text-white/88 md:text-lg">{premiumHotelSummary(hotel)}</p>
             <div className="mt-8 flex flex-wrap gap-3 text-sm font-semibold text-white/90">
-              <span className="inline-flex items-center gap-2 rounded-md border border-white/28 bg-black/36 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-md"><MapPin size={16} className="text-amber-200" /> {hotel.address?.city || 'Prime location'}</span>
-              <span className="rounded-md border border-white/28 bg-black/36 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-md">{rooms.length} room categor{rooms.length === 1 ? 'y' : 'ies'}</span>
+              <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-amberline/88 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><MapPin size={16} className="text-amber-100" /> Exclusive Stay & Fine Dine</span>
+              <span className="rounded-md border border-white/18 bg-zinc-900/70 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl">{rooms.length} room categor{rooms.length === 1 ? 'y' : 'ies'}</span>
             </div>
           </FadeIn>
 
@@ -140,14 +141,14 @@ export function HotelExperience() {
             <FadeIn className="order-2 lg:order-1">
               <p className="eyebrow">Hotel</p>
               <h2 className="mt-3 text-4xl font-bold leading-tight md:text-5xl">A stay shaped around arrival, comfort, and the details guests remember.</h2>
-              <p className="mt-5 text-base leading-8 text-stone-600">{hotel.description}</p>
+              <p className="mt-5 text-base leading-8 text-stone-600">{premiumHotelSummary(hotel)}</p>
               <div className="mt-8 grid gap-3 sm:grid-cols-3">
                 <Feature icon={Utensils} title="Dining" text="Warm service and polished cuisine." />
                 <Feature icon={Bath} title="Comfort" text="Thoughtful policies and guest rituals." />
                 <Feature icon={BedDouble} title="Rooms" text="Curated room categories for every stay." />
               </div>
             </FadeIn>
-            <HotelMedia hotel={hotel} heroImage={heroImage} />
+            <HotelMedia hotel={hotel} heroImage={heroImage} showcaseImages={showcaseImages} />
           </div>
         </section>
 
@@ -161,7 +162,7 @@ export function HotelExperience() {
               </p>
             </FadeIn>
             <FadeIn className="image-lift order-1 lg:order-2">
-              <img src={diningImage} alt="Fine dining" loading="lazy" className="h-[440px] w-full object-cover" />
+              <img src={diningMediaImage} alt="Fine dining" loading="lazy" className="h-[440px] w-full object-cover" />
             </FadeIn>
           </div>
         </section>
@@ -180,7 +181,7 @@ export function HotelExperience() {
 
         <section id="gallery" className="container-page pb-16 md:pb-24">
           <Stagger className="grid gap-3 md:grid-cols-4 md:grid-rows-[220px_220px]">
-            {galleryImages.map((image, index) => (
+            {visibleGalleryImages.map((image, index) => (
               <StaggerItem key={`${image}-${index}`} className={`image-lift ${index === 0 ? 'md:col-span-2 md:row-span-2' : ''}`}>
                 <img src={image} alt={`${hotel.name} gallery ${index + 1}`} loading={index ? 'lazy' : 'eager'} className="h-full min-h-56 w-full object-cover" />
               </StaggerItem>
@@ -198,6 +199,18 @@ const fallbackAmenities = [
   { name: 'Dining access', description: 'Breakfast and dining support.', price: 0 },
   { name: 'Secure booking', description: 'Direct confirmation and payment.', price: 0 },
 ]
+
+function cleanHotelName(value) {
+  return String(value || 'R.S. Exclusive').replace(/\s+/g, ' ').trim()
+}
+
+function premiumHotelSummary(hotel) {
+  const raw = String(hotel?.description || '').replace(/\s+/g, ' ').trim()
+  if (!raw || /proepr|appied|same\s*$/i.test(raw)) {
+    return `${cleanHotelName(hotel?.name)} brings direct booking, composed rooms, attentive guest care, and a polished Akola hospitality experience.`
+  }
+  return raw
+}
 
 function OfferShowcase({ offers, bookingUrl }) {
   const visibleOffers = offers.slice(0, 8)
@@ -270,23 +283,39 @@ function appendQueryParam(path, key, value) {
   return `${base}${query ? `?${query}` : ''}${hash ? `#${hash}` : ''}`
 }
 
-function HotelMedia({ hotel, heroImage }) {
-  const videoUrl = getYouTubeEmbedUrl(hotel.branding?.youtubeEmbedUrl)
-  const imageUrl = hotel.branding?.showcaseImageUrl || heroImage
+function HotelMedia({ hotel, heroImage, showcaseImages = [] }) {
+  const images = showcaseImages.length ? showcaseImages : [hotel.branding?.showcaseImageUrl || heroImage].filter(Boolean)
   return (
-    <FadeIn delay={0.1} className="image-lift order-1 aspect-[4/3] min-h-[320px] shadow-panel lg:order-2">
-      {videoUrl ? (
-        <iframe
-          className="h-full w-full"
-          src={videoUrl}
-          title={`${hotel.name} video`}
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-          allowFullScreen
-        />
-      ) : (
-        <img src={imageUrl} alt={`${hotel.name} showcase`} loading="lazy" className="h-full w-full object-cover" />
-      )}
+    <FadeIn delay={0.1} className="image-lift order-1 aspect-video min-h-[220px] shadow-panel sm:aspect-[4/3] sm:min-h-[320px] lg:order-2">
+      <ImageSlideshow images={images} alt={`${hotel.name} showcase`} />
     </FadeIn>
+  )
+}
+
+function ImageSlideshow({ images, alt }) {
+  const [index, setIndex] = useState(0)
+  useEffect(() => {
+    if (images.length < 2) return undefined
+    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 3200)
+    return () => window.clearInterval(timer)
+  }, [images.length])
+
+  return (
+    <div className="relative h-full w-full overflow-hidden">
+      <AnimatePresence initial={false}>
+        <motion.img
+          key={images[index]}
+          src={images[index]}
+          alt={alt}
+          loading="lazy"
+          className="absolute inset-0 h-full w-full object-cover"
+          initial={{ opacity: 0, scale: 1.04 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.75 }}
+        />
+      </AnimatePresence>
+    </div>
   )
 }
 
@@ -298,33 +327,35 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
   const possibleLoyaltyPoints = Math.max(0, Math.floor(Number(displayPrice || 0) / 100))
   return (
     <StaggerItem>
-      <article className="group grid overflow-hidden rounded-lg border border-stone-200 bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:shadow-card md:grid-cols-[240px_minmax(0,1fr)_225px] lg:grid-cols-[280px_minmax(0,1fr)_235px]">
-        <div className="image-lift h-52 rounded-none border-0 md:h-full md:min-h-[15.5rem]">
+      <article className="group grid overflow-hidden rounded-lg border border-stone-200 bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:border-amberline/30 hover:shadow-card md:grid-cols-[240px_minmax(0,1fr)_225px] lg:grid-cols-[280px_minmax(0,1fr)_235px]">
+        <div className="image-lift h-48 rounded-none border-0 sm:h-52 md:h-full md:min-h-[15.5rem]">
           <RotatingRoomImage room={room} className="h-full w-full object-cover" />
         </div>
-        <div className="flex min-w-0 flex-col gap-3 p-4 md:p-5">
+        <div className="flex min-w-0 flex-col gap-3 p-4 sm:p-5">
           <p className="text-xs font-bold uppercase tracking-[0.12em] text-stone-500">{room.bed_type || 'Curated stay'}</p>
-          <h3 className="mt-2 text-2xl font-bold leading-tight">{room.name}</h3>
-          <p className="line-clamp-2 text-sm leading-6 text-stone-600">{room.description}</p>
+          <h3 className="text-2xl font-bold leading-tight">{room.name}</h3>
+          <p className="line-clamp-2 text-sm leading-6 text-stone-600">{room.description || 'A composed room category prepared for comfort, clarity, and direct booking.'}</p>
           <div className="flex flex-wrap gap-2">
-            {(room.amenities || []).slice(0, 4).map((amenity) => <span key={amenity} className="rounded-md bg-bone px-3 py-2 text-xs font-bold text-stone-600">{amenity}</span>)}
+            {(room.amenities || []).slice(0, 3).map((amenity) => <span key={amenity} className="rounded-md bg-bone px-3 py-2 text-xs font-bold text-stone-600">{amenity}</span>)}
           </div>
           <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1.5fr)_minmax(190px,0.8fr)]">
             {offers.length ? <HomeRoomOfferPicker offers={offers} availabilityUrl={availabilityUrl} /> : null}
             <div className={`rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 ${offers.length ? '' : 'sm:col-span-2'}`}>
-              <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-900">Loyalty value</p>
-              <p className="mt-1 text-sm font-extrabold text-charcoal">Earn from {possibleLoyaltyPoints.toLocaleString('en-IN')} points</p>
-              <p className="text-xs font-semibold leading-5 text-stone-600">Saved points reduce checkout total later.</p>
+              <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-900">Loyalty</p>
+              <p className="text-sm font-extrabold text-charcoal">Earn {possibleLoyaltyPoints.toLocaleString('en-IN')} pts</p>
+              <p className="hidden text-xs font-semibold leading-5 text-stone-600 sm:block">Saved points can reduce checkout total later.</p>
             </div>
           </div>
         </div>
-        <div className="flex flex-col justify-between border-t border-emerald-200 bg-emerald-50 p-4 md:border-l md:border-t-0">
-          <span className="w-fit rounded-md bg-white px-3 py-2 text-xs font-bold text-stone-600">{room.size_sqft || 'Spacious'} sq ft</span>
-          <div className="mt-3">
-            {room.offer_price ? <p className="text-sm font-bold text-stone-500 line-through">Rs {Number(room.base_price).toLocaleString('en-IN')}</p> : null}
-            <p className="text-3xl font-black leading-none text-emerald-800">Rs {Number(displayPrice).toLocaleString('en-IN')}</p>
-            <p className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">per night</p>
-            {roomPriceSaving ? <p className="mt-2 rounded-md bg-white px-3 py-2 text-xs font-black text-emerald-800">Save Rs {roomPriceSaving.toLocaleString('en-IN')} / night</p> : null}
+        <div className="flex flex-col justify-between border-t border-emerald-200 bg-[linear-gradient(180deg,#ecfdf5_0%,#ffffff_100%)] p-4 md:border-l md:border-t-0">
+          <div className="grid grid-cols-[auto_1fr] items-start gap-3 md:block">
+            <span className="w-fit rounded-md bg-white px-3 py-2 text-xs font-bold text-stone-600 shadow-sm">{room.size_sqft || 'Spacious'} sq ft</span>
+            <div className="min-w-0 text-right md:mt-3 md:text-left">
+              {room.offer_price ? <p className="text-xs font-bold text-stone-500 line-through sm:text-sm">Rs {Number(room.base_price).toLocaleString('en-IN')}</p> : null}
+              <p className="text-2xl font-black leading-none text-emerald-800 sm:text-3xl">Rs {Number(displayPrice).toLocaleString('en-IN')}</p>
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">per night</p>
+              {roomPriceSaving ? <p className="mt-2 inline-flex rounded-md bg-white px-3 py-2 text-xs font-black text-emerald-800 shadow-sm">Save Rs {roomPriceSaving.toLocaleString('en-IN')}</p> : null}
+            </div>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-2">
             <Link to={detailsUrl} className="btn-secondary !min-h-10 !px-3"><span className="sm:hidden">View</span><span className="hidden sm:inline">View details</span></Link>
@@ -338,7 +369,7 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
 
 function HomeRoomOfferPicker({ offers, availabilityUrl }) {
   return (
-    <div className="rounded-lg border border-amber-200 bg-white p-3">
+    <div className="hidden rounded-lg border border-amber-200 bg-white p-3 sm:block">
       <p className="mb-2 text-xs font-black uppercase tracking-[0.14em] text-amberline">Apply offers</p>
       <div className="flex snap-x gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible sm:pb-0">
         {offers.slice(0, 4).map((offer) => (
@@ -360,15 +391,23 @@ function HomeRoomOfferPicker({ offers, availabilityUrl }) {
 function RotatingRoomImage({ room, className }) {
   const images = useMemo(() => getRoomImages(room), [room])
   const [index, setIndex] = useState(0)
+  const [pausedUntil, setPausedUntil] = useState(0)
+  const paused = pausedUntil > Date.now()
 
   useEffect(() => {
-    if (images.length < 2) return undefined
-    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 1000)
+    if (!paused) return undefined
+    const timer = window.setTimeout(() => setPausedUntil(0), Math.max(0, pausedUntil - Date.now()))
+    return () => window.clearTimeout(timer)
+  }, [paused, pausedUntil])
+
+  useEffect(() => {
+    if (images.length < 2 || paused) return undefined
+    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 2400)
     return () => window.clearInterval(timer)
-  }, [images.length])
+  }, [images.length, paused])
 
   return (
-    <span className="relative block h-full w-full overflow-hidden bg-stone-200">
+    <button className="relative block h-full w-full overflow-hidden bg-stone-200 text-left" type="button" aria-label="Pause room image rotation" onClick={() => setPausedUntil(Date.now() + 5000)}>
       {images.map((image, imageIndex) => (
         <img
           key={image.url}
@@ -378,7 +417,7 @@ function RotatingRoomImage({ room, className }) {
           className={`absolute inset-0 transition-opacity duration-700 ease-out ${className} ${imageIndex === index ? 'opacity-100' : 'opacity-0'}`}
         />
       ))}
-    </span>
+    </button>
   )
 }
 
@@ -525,25 +564,9 @@ function TenantError({ error }) {
   )
 }
 
-function getYouTubeEmbedUrl(value) {
-  if (!value) return ''
-  const raw = String(value).trim()
-  if (!raw) return ''
-  try {
-    const url = new URL(raw)
-    if (url.hostname.includes('youtube.com') && url.pathname.startsWith('/embed/')) return raw
-    if (url.hostname.includes('youtube.com')) {
-      const id = url.searchParams.get('v')
-      return id ? `https://www.youtube.com/embed/${id}` : ''
-    }
-    if (url.hostname.includes('youtu.be')) {
-      const id = url.pathname.split('/').filter(Boolean)[0]
-      return id ? `https://www.youtube.com/embed/${id}` : ''
-    }
-  } catch {
-    return ''
-  }
-  return ''
+function getMediaUrls(items) {
+  if (!Array.isArray(items)) return []
+  return items.map((item) => (typeof item === 'string' ? item : item?.url || item?.secureUrl)).filter(Boolean)
 }
 
 function formatDateLabel(value) {

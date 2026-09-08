@@ -193,7 +193,7 @@ export function AdminDashboard() {
         bedType: roomForm.bedType || undefined,
         amenities: amenityItems.map((item) => item.name),
         amenityItems,
-        heroImageUrl: images[0] || undefined,
+        heroImageUrl: images[0] || '',
         gallery: images.map((url, index) => ({ url, alt: `${roomForm.name} image ${index + 1}` })),
         showOnHomepage: Boolean(roomForm.showOnHomepage),
         active: Boolean(roomForm.active),
@@ -290,7 +290,7 @@ export function AdminDashboard() {
         ...offerForm,
         discountValue: Number(offerForm.discountValue || 0),
         minCompletedBookings: offerForm.audienceType === 'repeat_guest' ? Number(offerForm.minCompletedBookings || 1) : 0,
-        imageUrl: offerForm.imageUrl || undefined,
+        imageUrl: offerForm.imageUrl || '',
         code: offerForm.code || undefined,
       }
       if (offerForm.id) await apiFetch(`/admin/offers/${offerForm.id}`, { method: 'PATCH', body })

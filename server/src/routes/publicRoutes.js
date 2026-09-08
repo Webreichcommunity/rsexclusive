@@ -9,10 +9,17 @@ import { createBookingHold, confirmBookingPayment } from '../services/bookingSer
 import { getHotelProfile, listActiveHotels, listAmenitiesForHotel, listOffersForHotel, listRoomsForHotel } from '../services/hotelService.js'
 import { createAsyncRouter } from '../utils/asyncRouter.js'
 import { createCache } from '../utils/cache.js'
-import { badRequest, conflict, unauthorized } from '../utils/errors.js'
+import { badRequest, conflict, forbidden, unauthorized } from '../utils/errors.js'
 
 export const publicRoutes = createAsyncRouter()
 const publicCache = createCache(60_000)
+
+function requireActiveHotel(req, _res, next) {
+  if (req.hotel && req.hotel.status !== 'active') {
+    return next(forbidden('This hotel website is temporarily suspended. Please contact WebReich for support.'))
+  }
+  next()
+}
 
 const bookingSchema = z.object({
   roomTypeId: z.string().uuid(),
@@ -67,7 +74,7 @@ publicRoutes.get('/hotels', async (_req, res) => {
   res.json(publicCache.set('hotels', { hotels: await listActiveHotels() }))
 })
 
-publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, async (req, res) => {
+publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, requireActiveHotel, async (req, res) => {
   const cacheKey = `tenant:${req.hotel.id}:${req.user?.id || 'guest'}`
   const cached = publicCache.get(cacheKey)
   if (cached) return res.json(cached)
@@ -88,7 +95,7 @@ publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, async (req, res
   res.json(publicCache.set(cacheKey, { hotel, rooms, amenities, offers, loyaltyPoints: loyaltyRows.rows[0]?.points || 0 }))
 })
 
-publicRoutes.post('/auth/register', optionalTenant, validate(registerSchema), async (req, res) => {
+publicRoutes.post('/auth/register', optionalTenant, requireActiveHotel, validate(registerSchema), async (req, res) => {
   if (!req.hotel) throw badRequest('Open a hotel website before creating a guest account.', 'hotel_context_required')
 
   const header = req.header('authorization')
@@ -180,12 +187,12 @@ publicRoutes.post('/auth/register', optionalTenant, validate(registerSchema), as
   res.status(201).json({ user })
 })
 
-publicRoutes.get('/availability', requireTenant, validate(availabilitySchema, 'query'), async (req, res) => {
+publicRoutes.get('/availability', requireTenant, requireActiveHotel, validate(availabilitySchema, 'query'), async (req, res) => {
   const rooms = await searchAvailability({ query }, req.hotel.id, req.query)
   res.json({ rooms })
 })
 
-publicRoutes.post('/bookings/hold', requireTenant, authenticate, validate(bookingSchema), async (req, res) => {
+publicRoutes.post('/bookings/hold', requireTenant, requireActiveHotel, authenticate, validate(bookingSchema), async (req, res) => {
   const hold = await createBookingHold({ hotel: req.hotel, user: req.user, payload: req.body })
   res.status(201).json(hold)
 })
@@ -199,7 +206,7 @@ publicRoutes.post('/payments/verify', authenticate, validate(verifyPaymentSchema
   res.json({ booking })
 })
 
-publicRoutes.post('/feedback', requireTenant, optionalAuthenticate, validate(feedbackSchema), async (req, res) => {
+publicRoutes.post('/feedback', requireTenant, optionalAuthenticate, requireActiveHotel, validate(feedbackSchema), async (req, res) => {
   const { rows } = await query(
     `INSERT INTO hotel_feedback (hotel_id, user_id, name, email, phone, rating, message, metadata)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)

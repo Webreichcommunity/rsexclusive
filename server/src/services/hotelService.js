@@ -24,7 +24,7 @@ export async function getHotelProfile(hotelId) {
     `SELECT id, slug, name, subdomain, description, address, contact, policies, amenities,
             branding, hero_image_url, timezone, currency, tax_rate
      FROM hotels
-     WHERE id = $1 AND status = 'active'`,
+     WHERE id = $1`,
     [hotelId],
   )
   if (!rows[0]) throw notFound('Hotel not found')

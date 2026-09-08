@@ -1,12 +1,12 @@
 import { Link, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowUpRight, CalendarDays, Instagram, Menu, Phone, Sparkles, UserRound, X } from 'lucide-react'
+import { ArrowUpRight, CalendarDays, Facebook, Globe2, Instagram, Linkedin, Mail, MapPin, Menu, MessageCircle, Phone, Sparkles, Twitter, UserRound, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { ContactPanel } from '../contact/ContactPanel.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { useAuth } from '../../modules/auth/authContext.js'
 import { apiFetch } from '../../services/apiClient.js'
-import { buildTenantPath, isConsolePath, stripTenantFromPath } from '../../modules/tenant/resolveTenant.js'
+import { buildHotelUrl, buildTenantPath, isConsolePath, stripTenantFromPath } from '../../modules/tenant/resolveTenant.js'
 
 const fallbackHomeMediaImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1800&q=80'
 
@@ -19,10 +19,15 @@ export function AppShell({ children, mode }) {
     () => (mode.isTenant && !isConsoleRoute ? apiFetch('/tenant') : Promise.resolve({ hotel: null, offers: [] })),
     mode.isTenant && !isConsoleRoute ? `tenant:${mode.key}:${firebaseUser?.uid || 'guest'}:${firebaseUser?.emailVerified ? 'verified' : 'unverified'}` : 'group',
   )
+  const collection = useAsync(
+    () => (mode.isTenant && !isConsoleRoute ? apiFetch('/hotels') : Promise.resolve({ hotels: [] })),
+    mode.isTenant && !isConsoleRoute ? `tenant-collection:${mode.key}` : 'tenant-collection-empty',
+  )
   const hotel = tenant.data?.hotel
   const offers = tenant.data?.offers || []
+  const hotels = collection.data?.hotels || []
   const brandName = mode.isTenant ? hotel?.branding?.logoText || hotel?.name || 'R.S. Exclusive' : 'Ranjeet Groups of Hotels Akola'
-  const subline = mode.isTenant ? hotel?.address?.city || 'Boutique hospitality' : 'Independent hotel collection'
+  const subline = mode.isTenant ? (hotel ? cleanCity(hotel.address?.city) : 'Boutique hospitality') : 'Curated Akola hospitality'
   const accountLabel = isAuthenticated ? firstName(firebaseUser?.displayName || firebaseUser?.email || 'Account') : 'Login / Join'
   const accountPath = isAuthenticated ? tenantPath('/account', mode) : tenantPath('/login?mode=register', mode)
   const accountTitle = isAuthenticated ? firebaseUser?.email || 'Account' : 'Login or join'
@@ -36,13 +41,12 @@ export function AppShell({ children, mode }) {
     ? [
         ['Hotel', tenantPath('/#hotel', mode)],
         ['Offers', tenantPath('/#offers', mode)],
-        ['Rooms', tenantPath('/#rooms', mode)],
-        ['Experience', tenantPath('/#experience', mode)],
+        ['Rooms', tenantPath('/book', mode)],
+        ['Experience', tenantPath('/#dining', mode)],
       ]
     : [
         ['Properties', '/#properties'],
-        ['About', '/#experience'],
-        ['Gallery', '/#gallery'],
+        ['Experience', '/#experience'],
         ['Feedback', '/#feedback'],
       ]
 
@@ -51,8 +55,16 @@ export function AppShell({ children, mode }) {
   }, [location.pathname, location.search, location.hash])
 
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'auto' })
-  }, [location.pathname])
+    if (!location.hash) {
+      window.scrollTo({ top: 0, behavior: 'auto' })
+      return
+    }
+
+    const target = document.getElementById(location.hash.slice(1))
+    if (target) {
+      window.requestAnimationFrame(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+    }
+  }, [location.pathname, location.hash])
 
   useEffect(() => {
     if (!open) return undefined
@@ -78,9 +90,11 @@ export function AppShell({ children, mode }) {
       ) : null}
       <header className={headerClass}>
         <div className="container-page flex min-h-[72px] items-center justify-between gap-4">
-          <Link to={tenantPath('/', mode)} className="group flex min-w-0 items-center gap-3">
-            <span className={`grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-md text-base font-bold transition ${hotel?.branding?.logoUrl ? 'bg-transparent' : 'bg-white text-gray-900 group-hover:bg-amberline group-hover:text-white'}`}>
-              {hotel?.branding?.logoUrl ? (
+          <Link to={tenantPath('/', mode)} onClick={() => !mode.isTenant && window.scrollTo({ top: 0, behavior: 'smooth' })} className="group flex min-w-0 items-center gap-3">
+            <span className={`grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-md text-base font-bold transition ${(mode.isTenant && hotel?.branding?.logoUrl) || !mode.isTenant ? 'bg-transparent' : 'bg-white text-gray-900 group-hover:bg-amberline group-hover:text-white'}`}>
+              {!mode.isTenant ? (
+                <img src="/mainlogo.png" alt={`${brandName} logo`} className="h-full w-full object-contain" />
+              ) : hotel?.branding?.logoUrl ? (
                 <img src={hotel.branding.logoUrl} alt={`${brandName} logo`} className="h-full w-full object-contain" />
               ) : (
                 initials(brandName)
@@ -167,8 +181,8 @@ export function AppShell({ children, mode }) {
               >
                 <div className="flex min-h-[72px] items-center justify-between border-b border-mist px-4">
                   <Link to={tenantPath('/', mode)} onClick={() => setOpen(false)} className="flex min-w-0 items-center gap-3">
-                    <span className={`grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-md text-sm font-bold ${hotel?.branding?.logoUrl ? 'bg-transparent' : 'bg-charcoal text-white'}`}>
-                      {hotel?.branding?.logoUrl ? <img src={hotel.branding.logoUrl} alt={`${brandName} logo`} className="h-full w-full object-contain" /> : initials(brandName)}
+                    <span className={`grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-md text-sm font-bold ${(mode.isTenant && hotel?.branding?.logoUrl) || !mode.isTenant ? 'bg-transparent' : 'bg-charcoal text-white'}`}>
+                      {!mode.isTenant ? <img src="/mainlogo.png" alt={`${brandName} logo`} className="h-full w-full object-contain" /> : hotel?.branding?.logoUrl ? <img src={hotel.branding.logoUrl} alt={`${brandName} logo`} className="h-full w-full object-contain" /> : initials(brandName)}
                     </span>
                     <span className="min-w-0 leading-tight">
                       <span className="block truncate text-base font-bold text-charcoal">{brandName}</span>
@@ -207,50 +221,69 @@ export function AppShell({ children, mode }) {
 
       {mode.isTenant && hotel && !isConsoleRoute ? <ContactPanel hotel={hotel} /> : null}
 
-      <footer className="relative z-10 bg-charcoal py-12 text-white md:py-16">
-        <div className="container-page grid gap-10 lg:grid-cols-[1.2fr_0.8fr_0.8fr]">
+      {mode.isTenant ? <footer className="relative z-10 bg-[linear-gradient(180deg,#222222_0%,#111111_100%)] py-12 text-white md:py-16">
+        <div className="container-page grid gap-10 lg:grid-cols-[1.1fr_0.9fr_1fr_0.75fr]">
           <div>
-            <p className="text-4xl font-semibold">{brandName}</p>
+            <p className="text-4xl font-semibold leading-tight">{brandName}</p>
             <p className="mt-4 max-w-md text-sm leading-7 text-stone-300">
-              {hotel?.description || 'A refined hospitality platform for distinctive independent hotel experiences.'}
+              {premiumHotelSummary(hotel)}
             </p>
-            {mode.isTenant ? <Link to={tenantPath('/book', mode)} className="btn-dark mt-6"><CalendarDays size={18} /> Book Your Stay</Link> : null}
+            <div className="mt-6 flex flex-wrap gap-2">
+              {socialLinks(hotel).map(({ label, href, icon: Icon }) => (
+                <a key={label} href={href} target={href.startsWith('#') ? undefined : '_blank'} rel={href.startsWith('#') ? undefined : 'noreferrer'} aria-label={label} className="grid h-10 w-10 place-items-center rounded-md border border-white/12 bg-white/8 text-white transition hover:-translate-y-0.5 hover:border-amber-200/50 hover:bg-white/14">
+                  <Icon size={18} />
+                </a>
+              ))}
+            </div>
+            <Link to={tenantPath('/book', mode)} className="btn-dark mt-6"><CalendarDays size={18} /> Book Your Stay</Link>
           </div>
           <div>
-            <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-stone-400">Hotel</p>
-            <div className="mt-4 grid gap-3 text-sm text-stone-300">
-              <span>{hotel?.address?.line1 || 'R.S. Exclusive Collection'}</span>
-              <span>{[hotel?.address?.city, hotel?.address?.state, hotel?.address?.country].filter(Boolean).join(', ') || 'India'}</span>
-              <span>{hotel?.policies?.checkIn ? `Check-in ${hotel.policies.checkIn} / Check-out ${hotel.policies.checkOut}` : 'Secure bookings and tenant-isolated operations'}</span>
+            <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-stone-400">Listed Hotels</p>
+            <div className="mt-4 grid gap-3">
+              {(hotels.length ? hotels : [hotel].filter(Boolean)).map((item) => (
+                <a key={item.id || item.slug} href={buildHotelUrl(item)} className="group rounded-md border border-white/10 bg-white/5 p-3 transition hover:border-amber-200/40 hover:bg-white/10">
+                  <span className="block text-sm font-bold text-white group-hover:text-amber-100">{cleanHotelName(item.name)}</span>
+                  <span className="mt-1 flex items-center gap-2 text-xs font-semibold text-stone-400"><MapPin size={14} /> {cleanCity(item.address?.city)}, {item.address?.state || 'Maharashtra'}</span>
+                </a>
+              ))}
             </div>
           </div>
           <div>
             <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-stone-400">Contact</p>
             <div className="mt-4 grid gap-3 text-sm text-stone-300">
-              <span className="flex items-center gap-2"><Phone size={16} /> {hotel?.contact?.phone || '+91 90000 00000'}</span>
-              <span>{hotel?.contact?.email || 'bookings@example.com'}</span>
-              <span className="flex items-center gap-2"><Instagram size={16} /> Social channels</span>
+              <span className="flex items-center gap-2"><Phone size={16} className="text-amber-100" /> {hotelPhones(hotel).join(', ') || '+91 90000 00000'}</span>
+              <span className="flex items-center gap-2"><Mail size={16} className="text-amber-100" /> {hotel?.contact?.email || 'bookings@example.com'}</span>
+              <span className="flex items-center gap-2"><MapPin size={16} className="text-amber-100" /> {formatAddress(hotel)}</span>
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-stone-400">Explore</p>
+            <div className="mt-4 grid gap-3 text-sm font-semibold text-stone-300">
+              <Link to={tenantPath('/#offers', mode)} className="transition hover:text-white">Live offers</Link>
+              <Link to={tenantPath('/book', mode)} className="transition hover:text-white">Rooms</Link>
+              <Link to={tenantPath('/#dining', mode)} className="transition hover:text-white">Experience</Link>
+              <span className="flex items-center gap-2 pt-2 text-stone-400"><Globe2 size={16} /> Direct hotel booking</span>
             </div>
           </div>
         </div>
-        <div className="container-page mt-3 border-t border-white/10 pt-6">
-          <div className="flex flex-col items-center justify-center gap-2 text-center">
-            <p className="text-[0.68rem] font-bold uppercase tracking-[0.18em] text-stone-500">Developed by</p>
+        <div className="container-page mt-10 border-t border-white/10 pt-6">
+          <div className="flex flex-col items-center justify-between gap-4 text-center md:flex-row md:text-left">
+            <p className="text-sm text-stone-400">&copy; {new Date().getFullYear()} {cleanHotelName(brandName)}. All rights reserved.</p>
             <span className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-transparent px-3 py-2 text-sm font-black tracking-[0.12em] text-white">
-              <span className="grid h-6 w-6 place-items-center rounded-md bg-transparent text-[0.65rem]">
-              <img src="https://www.webreich.in/logo.png" alt="WR" />
-              </span>
-              WEBREICH
+              <span className="text-[0.68rem] font-bold uppercase tracking-[0.18em] text-stone-500">Developed by</span>
+              <span className="grid h-6 w-6 place-items-center rounded-md bg-transparent text-[0.65rem]"><img src="https://www.webreich.in/logo.png" alt="WR" /></span>
+              WebReich
             </span>
           </div>
         </div>
-      </footer>
+      </footer> : null}
     </div>
   )
 }
 
 function TenantMediaBackdrop({ hotel, full = false }) {
-  const image = hotel?.hero_image_url || fallbackHomeMediaImage
+  const images = getHotelHeroImages(hotel)
+  const image = images[0] || fallbackHomeMediaImage
   const media = getBackgroundVideoSource(hotel?.branding?.youtubeEmbedUrl)
   const frameClass = full
     ? 'pointer-events-none fixed inset-0 z-0 overflow-hidden bg-charcoal'
@@ -274,8 +307,32 @@ function TenantMediaBackdrop({ hotel, full = false }) {
         />
       ) : null}
       {media?.type === 'file' ? <video className="absolute inset-0 h-full w-full object-cover object-top" src={media.src} poster={image} autoPlay muted loop playsInline /> : null}
-      {!media ? <img className="absolute inset-0 h-full w-full object-cover object-top" src={image} alt="" /> : null}
+      {!media ? <BackdropSlideshow images={images.length ? images : [image]} /> : null}
     </div>
+  )
+}
+
+function BackdropSlideshow({ images }) {
+  const [index, setIndex] = useState(0)
+  useEffect(() => {
+    if (images.length < 2) return undefined
+    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 3600)
+    return () => window.clearInterval(timer)
+  }, [images.length])
+
+  return (
+    <AnimatePresence initial={false}>
+      <motion.img
+        key={images[index]}
+        className="absolute inset-0 h-full w-full object-cover object-top"
+        src={images[index]}
+        alt=""
+        initial={{ opacity: 0, scale: 1.03 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.9 }}
+      />
+    </AnimatePresence>
   )
 }
 
@@ -329,6 +386,65 @@ function firstName(value) {
 
 function tenantPath(path, mode) {
   return buildTenantPath(path, mode)
+}
+
+function cleanHotelName(value) {
+  return String(value || 'R.S. Exclusive').replace(/\s+/g, ' ').trim()
+}
+
+function cleanCity(value) {
+  const city = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!city || /exlusive|exclusive|fine dine|stay/i.test(city)) return 'Akola'
+  return city
+}
+
+function hotelPhones(hotel) {
+  return [...new Set([...(hotel?.contact?.phones || []), hotel?.contact?.phone, hotel?.contact?.whatsapp].filter(Boolean))]
+}
+
+function premiumHotelSummary(hotel) {
+  const raw = String(hotel?.description || '').replace(/\s+/g, ' ').trim()
+  if (!raw || /proepr|appied|same\s*$/i.test(raw)) {
+    return `${cleanHotelName(hotel?.name)} brings direct booking, composed rooms, attentive guest care, and a polished Akola hospitality experience.`
+  }
+  return raw
+}
+
+function formatAddress(hotel) {
+  const line = String(hotel?.address?.line1 || '').replace(/\s+/g, ' ').trim()
+  if (line) return line
+  return [cleanCity(hotel?.address?.city), hotel?.address?.state, hotel?.address?.country].filter(Boolean).join(', ') || 'Akola, Maharashtra'
+}
+
+function socialLinks(hotel) {
+  const social = hotel?.contact?.social || {}
+  const whatsapp = hotel?.contact?.whatsapp || hotel?.contact?.phone
+  return [
+    { label: 'Facebook', href: platformUrl(social.facebook, 'facebook.com'), icon: Facebook },
+    { label: 'Instagram', href: platformUrl(social.instagram, 'instagram.com'), icon: Instagram },
+    { label: 'WhatsApp', href: whatsappLink(whatsapp, hotel), icon: MessageCircle },
+    { label: 'LinkedIn', href: platformUrl(social.linkedin, 'linkedin.com'), icon: Linkedin },
+    { label: 'X Twitter', href: platformUrl(social.twitter || social.x, 'x.com') || platformUrl(social.twitter || social.x, 'twitter.com'), icon: Twitter },
+  ].filter((item) => item.href)
+}
+
+function platformUrl(value, domain) {
+  const url = String(value || '').trim()
+  return url.includes(domain) ? url : ''
+}
+
+function whatsappLink(value, hotel) {
+  const number = String(value || '').replace(/\D/g, '')
+  if (!number) return ''
+  const message = encodeURIComponent(`Hello ${cleanHotelName(hotel?.name)}, I want to know more about booking a stay.`)
+  return `https://wa.me/${number}?text=${message}`
+}
+
+function getHotelHeroImages(hotel) {
+  const uploaded = Array.isArray(hotel?.branding?.heroImages)
+    ? hotel.branding.heroImages.map((item) => (typeof item === 'string' ? item : item?.url || item?.secureUrl)).filter(Boolean)
+    : []
+  return [...uploaded, hotel?.hero_image_url].filter(Boolean)
 }
 
 function getBackgroundVideoSource(value) {

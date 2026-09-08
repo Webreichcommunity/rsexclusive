@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import { Bath, BedDouble, CalendarCheck, CalendarDays, Check, ChevronLeft, ChevronRight, CreditCard, Gift, Loader2, Minus, Plus, ShieldCheck, UsersRound } from 'lucide-react'
 import { FadeIn, Stagger, StaggerItem } from '../../components/ui/Motion.jsx'
 import { AutoScrollRow } from '../../components/ui/AutoScrollRow.jsx'
 import { LoadingState } from '../../components/ui/LoadingState.jsx'
+import { GuideToast } from '../../components/ui/GuideToast.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { useAuth } from '../auth/authContext.js'
 import { apiFetch } from '../../services/apiClient.js'
@@ -52,7 +53,11 @@ export function BookingPage() {
   const [paymentMode, setPaymentMode] = useState(params.get('paymentMode') === 'partial' ? 'partial' : 'full')
   const [searched, setSearched] = useState(false)
   const [status, setStatus] = useState({ loading: false, error: '', paymentError: '' })
+  const [guideToast, setGuideToast] = useState(null)
+  const guideToastTimer = useRef(null)
+  const roomsSectionRef = useRef(null)
   const initialAvailabilityLoaded = useRef(false)
+  const defaultOfferApplied = useRef(false)
   const loadAvailabilityRef = useRef(null)
   const { data, loading, error } = useAsync(() => apiFetch('/tenant'), authLoading ? 'auth-loading' : `${firebaseUser?.uid || 'guest'}:${firebaseUser?.emailVerified ? 'verified' : 'unverified'}`)
   const step = params.get('step') || 'list'
@@ -148,6 +153,13 @@ export function BookingPage() {
   }, [data, form, offers, selectedOfferId, selectedRoomId, step, syncUrl])
 
   useEffect(() => {
+    if (defaultOfferApplied.current || !data || selectedOfferId || !offers[0]?.id) return
+    defaultOfferApplied.current = true
+    setSelectedOfferId(offers[0].id)
+    syncUrl(form, selectedRoomId, { step: step === 'review' || step === 'details' ? step : undefined, offerId: offers[0].id })
+  }, [data, form, offers, selectedOfferId, selectedRoomId, step, syncUrl])
+
+  useEffect(() => {
     if (!priceRoom || !selectedAmenityIds.length) return
     const validIds = new Set(getBookableAmenityItems(priceRoom, bookableAmenities).map((amenity) => amenity.id).filter(Boolean))
     const nextSelected = selectedAmenityIds.filter((id) => validIds.has(id))
@@ -174,6 +186,20 @@ export function BookingPage() {
       silent: true,
     })
   }, [allRooms, hasInitialSearchParams, loading, params, selectedRoomId, stayDateError])
+
+  useEffect(() => () => window.clearTimeout(guideToastTimer.current), [])
+
+  function showGuideToast(title, message, tone = 'warning') {
+    window.clearTimeout(guideToastTimer.current)
+    setGuideToast({ id: `${Date.now()}-${title}`, title, message, tone })
+    guideToastTimer.current = window.setTimeout(() => setGuideToast(null), 3000)
+  }
+
+  function scrollToRooms() {
+    window.requestAnimationFrame(() => {
+      roomsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
 
   function updateStayForm(next) {
     setForm(next)
@@ -252,7 +278,11 @@ export function BookingPage() {
 
   async function searchRooms(event) {
     event?.preventDefault()
-    await loadAvailability()
+    if (stayDateError) {
+      showGuideToast('Check your stay dates', stayDateError)
+    }
+    const availability = await loadAvailability()
+    if (availability) scrollToRooms()
   }
 
   async function selectRoom(room) {
@@ -275,7 +305,7 @@ export function BookingPage() {
     const next = syncUrl(form, room.id, { step: 'review' })
     if (!isAuthenticated) {
       const returnTo = encodeURIComponent(`${location.pathname}?${next.toString()}`)
-      navigate(buildTenantPath(`/login?returnTo=${returnTo}`, resolveTenantFromLocation()))
+      navigate(buildTenantPath(`/login?mode=register&returnTo=${returnTo}`, resolveTenantFromLocation()))
       return
     }
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -303,23 +333,26 @@ export function BookingPage() {
   function requireLogin() {
     const next = syncUrl(form, selectedRoomId)
     const returnTo = encodeURIComponent(`${location.pathname}?${next.toString()}`)
-    navigate(buildTenantPath(`/login?returnTo=${returnTo}`, resolveTenantFromLocation()))
+    navigate(buildTenantPath(`/login?mode=register&returnTo=${returnTo}`, resolveTenantFromLocation()))
   }
 
   async function proceedToPayment() {
     if (status.loading) return
     if (stayDateError) {
       setStatus({ loading: false, error: stayDateError, paymentError: stayDateError })
+      showGuideToast('Check your stay dates', stayDateError)
       return
     }
     if (!selectedRoom) {
       setStatus({ loading: false, error: 'Select an available room before continuing.', paymentError: 'Select an available room before continuing.' })
+      showGuideToast('Select a room first', 'Choose an available room before opening secure payment.')
       return
     }
     if (!searched || !availableRooms.some((room) => room.id === selectedRoom.id)) {
       const availability = await loadAvailability({ preferredRoomId: selectedRoom.id, silent: true })
       if (!availability?.rooms.some((room) => room.id === selectedRoom.id)) {
         setStatus({ loading: false, error: 'This room is not available for the selected dates. Please choose another room.', paymentError: 'This room is not available for the selected dates. Please choose another room.' })
+        showGuideToast('Room unavailable', 'Search again and choose another available room.')
         return
       }
     }
@@ -327,8 +360,19 @@ export function BookingPage() {
       requireLogin()
       return
     }
+    if (!String(form.guestName || '').trim()) {
+      setStatus({ loading: false, error: '', paymentError: 'Enter the guest name to continue with this booking.' })
+      showGuideToast('Add guest name', 'Please enter the guest name before booking this room.')
+      return
+    }
+    if (!String(form.guestEmail || '').trim() || !String(form.guestEmail || '').includes('@')) {
+      setStatus({ loading: false, error: '', paymentError: 'Enter a valid guest email to continue with this booking.' })
+      showGuideToast('Add guest email', 'Please enter a valid email address for booking updates.')
+      return
+    }
     if (String(form.guestPhone || '').trim().length < 7) {
       setStatus({ loading: false, error: '', paymentError: 'Enter a valid phone number to continue with this booking.' })
+      showGuideToast('Add phone number', 'Please enter a valid phone number before booking this room.')
       return
     }
 
@@ -483,13 +527,14 @@ export function BookingPage() {
         loyaltyPoints={loyaltyPoints}
         offers={offers}
         status={status}
+        guideToast={guideToast}
         isAuthenticated={isAuthenticated}
-        selectedRoom={selectedRoom}
         stayDateError={stayDateError}
         onBack={backToRooms}
         onSelectOffer={chooseOffer}
         onToggleAmenity={toggleAmenity}
         onRedeemPoints={chooseRedeemPoints}
+        onGuide={showGuideToast}
         onPaymentMode={choosePaymentMode}
         onPay={proceedToPayment}
       />
@@ -498,6 +543,7 @@ export function BookingPage() {
 
   return (
     <main className="bg-ivory">
+      <GuideToast toast={guideToast} />
       <section className="relative min-h-[46svh] overflow-hidden bg-charcoal text-white md:min-h-[54svh]">
         <BookingHeroBackground hotel={data.hotel} />
         <div className="absolute inset-0 bg-black/16" />
@@ -520,7 +566,7 @@ export function BookingPage() {
             <Field label="Adults"><Stepper value={form.adults} min={1} onChange={(value) => updateStayForm({ ...form, adults: value })} /></Field>
             <Field label="Children"><Stepper value={form.children} min={0} onChange={(value) => updateStayForm({ ...form, children: value })} /></Field>
             <Field label="Rooms" className="col-span-2 sm:col-span-1"><Stepper value={form.roomsCount} min={1} onChange={(value) => updateStayForm({ ...form, roomsCount: value })} /></Field>
-            <button className="btn-primary col-span-2 h-12 w-full px-5 sm:col-span-1 lg:col-span-1" type="submit" disabled={status.loading || Boolean(stayDateError)}>
+            <button className="btn-primary col-span-2 h-12 w-full px-5 sm:col-span-1 lg:col-span-1" type="submit" disabled={status.loading}>
               {status.loading ? <Loader2 size={18} className="animate-spin" /> : <CalendarCheck size={18} />} Search Rooms
             </button>
           </form>
@@ -530,7 +576,7 @@ export function BookingPage() {
 
         {offers.length ? <BookingOfferBand offers={offers} selectedOfferId={selectedOfferId} onSelectOffer={chooseOffer} /> : null}
 
-        <div className="mt-7">
+        <div ref={roomsSectionRef} className="mt-7 scroll-mt-28">
           <section className="grid gap-5">
             <div className="flex items-center justify-between gap-4">
               <div>
@@ -580,7 +626,8 @@ function BookingOfferBand({ offers, selectedOfferId, onSelectOffer }) {
 }
 
 function BookingHeroBackground({ hotel }) {
-  const image = hotel?.hero_image_url || fallbackRoomImage
+  const images = getHotelHeroImages(hotel)
+  const image = images[0] || fallbackRoomImage
   const media = getBackgroundVideoSource(hotel?.branding?.youtubeEmbedUrl)
 
   if (media?.type === 'youtube') {
@@ -619,25 +666,52 @@ function BookingHeroBackground({ hotel }) {
     )
   }
 
-  return <img className="absolute inset-0 h-full w-full object-cover object-center sm:object-top" src={image} alt="" aria-hidden="true" />
+  return <HeroSlideshow images={images.length ? images : [image]} />
+}
+
+function HeroSlideshow({ images }) {
+  const [index, setIndex] = useState(0)
+  useEffect(() => {
+    if (images.length < 2) return undefined
+    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 3600)
+    return () => window.clearInterval(timer)
+  }, [images.length])
+
+  return (
+    <AnimatePresence initial={false}>
+      <motion.img
+        key={images[index]}
+        className="absolute inset-0 h-full w-full object-cover object-center sm:object-top"
+        src={images[index]}
+        alt=""
+        aria-hidden="true"
+        initial={{ opacity: 0, scale: 1.03 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.9 }}
+      />
+    </AnimatePresence>
+  )
 }
 
 function OfferChoiceCard({ offer, selected, onSelect, compact = false }) {
+  const visual = getOfferVisual(offer)
   return (
     <button
       type="button"
       onClick={onSelect}
-      className={`group min-h-40 w-[84vw] max-w-[22rem] shrink-0 snap-start rounded-lg border bg-white/82 p-4 text-left shadow-sm backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:shadow-card sm:w-[20rem] ${selected ? 'border-amberline ring-2 ring-amberline/20' : 'border-white/70'}`}
+      className={`group min-h-40 w-[84vw] max-w-[22rem] shrink-0 snap-start rounded-lg border p-4 text-left shadow-sm backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:shadow-card sm:w-[20rem] ${selected ? 'border-white/80 text-white ring-2 ring-white/45' : 'border-white/70 bg-white/82 text-charcoal'}`}
+      style={selected ? { backgroundImage: visual.card, boxShadow: visual.shadow } : undefined}
     >
       <div className="flex items-start justify-between gap-3">
-        <span className="inline-flex items-center gap-2 rounded-md bg-charcoal px-3 py-2 text-xs font-black uppercase text-white">
+        <span className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-xs font-black uppercase ${selected ? 'bg-white/18 text-white ring-1 ring-white/25' : 'bg-charcoal text-white'}`}>
           <Gift size={15} /> {offer.badge || (offer.audience_type === 'repeat_guest' ? 'For you' : 'Offer')}
         </span>
-        <span className={`rounded-md px-2 py-1 text-xs font-black ${selected ? 'bg-amberline text-white' : 'bg-bone text-stone-600'}`}>{selected ? 'Applied' : 'Apply'}</span>
+        <span className={`rounded-md px-2 py-1 text-xs font-black ${selected ? 'bg-white/90 text-charcoal' : 'bg-bone text-stone-600'}`}>{selected ? 'Applied' : 'Apply'}</span>
       </div>
       <h3 className={`mt-4 font-extrabold leading-tight ${compact ? 'text-lg' : 'text-xl'}`}>{offer.title}</h3>
-      <p className="mt-2 text-sm font-black text-amberline">{formatOfferValue(offer)}</p>
-      <p className="mt-2 line-clamp-2 text-sm leading-6 text-stone-600">{offer.description}</p>
+      <p className={`mt-2 text-sm font-black ${selected ? 'text-white' : 'text-amberline'}`}>{formatOfferValue(offer)}</p>
+      <p className={`mt-2 line-clamp-2 text-sm leading-6 ${selected ? 'text-white/78' : 'text-stone-600'}`}>{offer.description}</p>
     </button>
   )
 }
@@ -655,6 +729,7 @@ function RoomCard({ room, searched, selected, loading, offers, selectedOfferId, 
   const bestNightPrice = roundMoney((offer ? discountedStayTotal : staySubtotal) / stayNights / roomUnits)
   const compareNightPrice = room.offer_price ? Number(room.base_price || 0) : Number(displayPrice || 0)
   const offerNightSaving = offer ? Math.max(0, roundMoney(Number(displayPrice || 0) - bestNightPrice)) : 0
+  const offerVisual = offer ? getOfferVisual(offer) : null
   return (
     <StaggerItem as="article" className={`group grid overflow-hidden rounded-lg border bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:shadow-card md:grid-cols-[240px_minmax(0,1fr)_225px] lg:grid-cols-[280px_minmax(0,1fr)_235px] ${selected ? 'border-amberline ring-2 ring-amberline/25' : 'border-white/80'}`}>
       <div className="image-lift h-52 rounded-none md:h-full md:min-h-[15.5rem]">
@@ -674,9 +749,9 @@ function RoomCard({ room, searched, selected, loading, offers, selectedOfferId, 
             <RoomCardOfferPicker offers={offers} selectedOfferId={selectedOfferId} onSelectOffer={onSelectOffer} />
           ) : null}
           <div className={`rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 ${offers.length ? '' : 'sm:col-span-2'}`}>
-            <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-900">Loyalty value</p>
-            <p className="mt-1 text-sm font-extrabold text-charcoal">Earn {possibleLoyaltyPoints.toLocaleString('en-IN')} points</p>
-            <p className="text-xs font-semibold leading-5 text-stone-600">Redeem saved points at checkout. 1 point = Rs 100.</p>
+            <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-900">Loyalty</p>
+            <p className="text-sm font-extrabold text-charcoal">Earn {possibleLoyaltyPoints.toLocaleString('en-IN')} pts</p>
+            <p className="hidden text-xs font-semibold leading-5 text-stone-600 sm:block">Redeem saved points at checkout. 1 point = Rs 100.</p>
           </div>
         </div>
         <div className="mt-auto flex flex-wrap gap-4 border-t border-mist pt-3 text-sm font-semibold text-stone-600">
@@ -687,15 +762,19 @@ function RoomCard({ room, searched, selected, loading, offers, selectedOfferId, 
       <div className="flex flex-col justify-between border-t border-emerald-200 bg-[linear-gradient(180deg,#ecfdf5_0%,#ffffff_100%)] p-4 md:border-l md:border-t-0">
         <div>
           <p className="text-xs font-black uppercase tracking-[0.16em] text-emerald-700">Best available price</p>
-          {compareNightPrice > bestNightPrice ? <p className="mt-2 text-sm font-bold text-stone-500 line-through">Rs {compareNightPrice.toLocaleString('en-IN')}</p> : null}
-          <p className="mt-1 text-3xl font-black leading-none text-emerald-800">Rs {bestNightPrice.toLocaleString('en-IN')}</p>
-          <p className="mt-1 text-xs font-bold text-stone-500">per night</p>
-          {roomPriceSaving ? <p className="mt-2 rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-black text-emerald-800">Saves Rs {roomPriceSaving.toLocaleString('en-IN')} / night</p> : null}
+          <div className="mt-2 grid grid-cols-[1fr_auto] items-end gap-3 md:block">
+            <div>
+              {compareNightPrice > bestNightPrice ? <p className="text-xs font-bold text-stone-500 line-through sm:text-sm">Rs {compareNightPrice.toLocaleString('en-IN')}</p> : null}
+              <p className="mt-1 text-2xl font-black leading-none text-emerald-800 sm:text-3xl">Rs {bestNightPrice.toLocaleString('en-IN')}</p>
+              <p className="mt-1 text-xs font-bold text-stone-500">per night</p>
+            </div>
+            {roomPriceSaving ? <p className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-black text-emerald-800 md:mt-2">Save Rs {roomPriceSaving.toLocaleString('en-IN')}</p> : null}
+          </div>
           {offer ? (
-            <div className="mt-2 rounded-lg border border-emerald-300 bg-emerald-100 p-3">
-              <p className="text-xs font-black uppercase tracking-[0.14em] text-emerald-800">Offer applied</p>
-              <p className="mt-1 text-xl font-black text-charcoal">Rs {discountedStayTotal.toLocaleString('en-IN')}</p>
-              <p className="text-xs font-bold text-emerald-800">{offerNightSaving ? `Rs ${offerNightSaving.toLocaleString('en-IN')} less per night. ` : ''}Stay saves Rs {cardDiscount.toLocaleString('en-IN')}</p>
+            <div className="mt-2 rounded-lg border border-white/70 p-3 text-white shadow-soft backdrop-blur-xl" style={{ backgroundImage: offerVisual.card }}>
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-white/78">Offer applied</p>
+              <p className="mt-1 text-xl font-black">Rs {discountedStayTotal.toLocaleString('en-IN')}</p>
+              <p className="text-xs font-bold text-white/82">{offerNightSaving ? `Rs ${offerNightSaving.toLocaleString('en-IN')} less per night. ` : ''}Stay saves Rs {cardDiscount.toLocaleString('en-IN')}</p>
             </div>
           ) : null}
         </div>
@@ -713,7 +792,7 @@ function RoomCard({ room, searched, selected, loading, offers, selectedOfferId, 
 
 function RoomCardOfferPicker({ offers, selectedOfferId, onSelectOffer }) {
   return (
-    <div className="rounded-lg border border-amber-200 bg-white p-3">
+    <div className="hidden rounded-lg border border-amber-200 bg-white p-3 sm:block">
       <div className="mb-2 flex items-center justify-between gap-2">
         <p className="text-xs font-black uppercase tracking-[0.14em] text-amberline">Offers</p>
         {selectedOfferId ? (
@@ -725,18 +804,20 @@ function RoomCardOfferPicker({ offers, selectedOfferId, onSelectOffer }) {
       <div className="flex snap-x gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible sm:pb-0">
         {offers.slice(0, 4).map((item) => {
           const selected = selectedOfferId === item.id
+          const visual = getOfferVisual(item)
           return (
             <button
               key={item.id}
               type="button"
-              className={`w-40 shrink-0 snap-start rounded-md border px-3 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-soft sm:w-auto ${selected ? 'border-emerald-300 bg-emerald-50' : 'border-stone-200 bg-bone/60'}`}
+              className={`w-40 shrink-0 snap-start rounded-md border px-3 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-soft sm:w-auto ${selected ? 'border-white/80 text-white ring-1 ring-white/40' : 'border-stone-200 bg-bone/60 text-charcoal'}`}
+              style={selected ? { backgroundImage: visual.compact } : undefined}
               onClick={() => onSelectOffer(item.id)}
             >
               <span className="flex items-start justify-between gap-2">
-                <span className="line-clamp-1 text-xs font-extrabold text-charcoal">{item.title}</span>
-                <span className={`shrink-0 rounded px-2 py-0.5 text-[0.64rem] font-black uppercase ${selected ? 'bg-emerald-700 text-white' : 'bg-bone text-stone-600'}`}>{selected ? 'Applied' : 'Apply'}</span>
+                <span className={`line-clamp-1 text-xs font-extrabold ${selected ? 'text-white' : 'text-charcoal'}`}>{item.title}</span>
+                <span className={`shrink-0 rounded px-2 py-0.5 text-[0.64rem] font-black uppercase ${selected ? 'bg-white/90 text-charcoal' : 'bg-bone text-stone-600'}`}>{selected ? 'Applied' : 'Apply'}</span>
               </span>
-              <span className="mt-1 block text-xs font-black text-emerald-800">{formatOfferValue(item)}</span>
+              <span className={`mt-1 block text-xs font-black ${selected ? 'text-white/85' : 'text-emerald-800'}`}>{formatOfferValue(item)}</span>
             </button>
           )
         })}
@@ -749,15 +830,23 @@ function RoomCardOfferPicker({ offers, selectedOfferId, onSelectOffer }) {
 function RotatingRoomImage({ room, className }) {
   const images = useMemo(() => getRoomImages(room), [room])
   const [index, setIndex] = useState(0)
+  const [pausedUntil, setPausedUntil] = useState(0)
+  const paused = pausedUntil > Date.now()
 
   useEffect(() => {
-    if (images.length < 2) return undefined
-    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 1000)
+    if (!paused) return undefined
+    const timer = window.setTimeout(() => setPausedUntil(0), Math.max(0, pausedUntil - Date.now()))
+    return () => window.clearTimeout(timer)
+  }, [paused, pausedUntil])
+
+  useEffect(() => {
+    if (images.length < 2 || paused) return undefined
+    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 2400)
     return () => window.clearInterval(timer)
-  }, [images.length])
+  }, [images.length, paused])
 
   return (
-    <span className="relative block h-full w-full overflow-hidden bg-stone-200">
+    <button className="relative block h-full w-full overflow-hidden bg-stone-200 text-left" type="button" aria-label="Pause room image rotation" onClick={() => setPausedUntil(Date.now() + 5000)}>
       {images.map((image, imageIndex) => (
         <img
           key={image.url}
@@ -767,7 +856,7 @@ function RotatingRoomImage({ room, className }) {
           className={`absolute inset-0 transition-opacity duration-700 ease-out ${className} ${imageIndex === index ? 'opacity-100' : 'opacity-0'}`}
         />
       ))}
-    </span>
+    </button>
   )
 }
 
@@ -799,20 +888,23 @@ function BookingReviewPage({
   loyaltyPoints,
   offers,
   status,
+  guideToast,
   isAuthenticated,
-  selectedRoom,
   stayDateError,
   onBack,
   onSelectOffer,
   onToggleAmenity,
   onRedeemPoints,
+  onGuide,
   onPaymentMode,
   onPay,
 }) {
   const roomAmenities = getBookableAmenityItems(priceRoom, data.amenities || [])
   const [breakdownOpen, setBreakdownOpen] = useState(false)
+  const selectedOfferVisual = selectedOffer ? getOfferVisual(selectedOffer) : null
   return (
     <main className="bg-ivory">
+      <GuideToast toast={guideToast} />
       <section className="bg-charcoal text-white">
         <div className="container-page py-12 md:py-16">
           <FadeIn viewport={false}>
@@ -908,9 +1000,9 @@ function BookingReviewPage({
                 </div>
               ) : null}
               {selectedOffer ? (
-                <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-3">
-                  <p className="flex items-center gap-2 text-sm font-extrabold text-emerald-900"><Gift size={17} /> Offer applied</p>
-                  <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">{formatOfferValue(selectedOffer)} has been applied to this booking. Server will recheck it before payment.</p>
+                <div className="mt-4 rounded-md border border-white/70 p-3 text-white shadow-soft backdrop-blur-xl" style={{ backgroundImage: selectedOfferVisual.card }}>
+                  <p className="flex items-center gap-2 text-sm font-extrabold"><Gift size={17} /> Offer applied</p>
+                  <p className="mt-1 text-xs font-semibold leading-5 text-white/80">{formatOfferValue(selectedOffer)} has been applied to this booking. Server will recheck it before payment.</p>
                 </div>
               ) : offers.length ? (
                 <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">Select an offer card to apply a discount before payment.</p>
@@ -922,6 +1014,7 @@ function BookingReviewPage({
                 discount={loyaltyDiscount}
                 subtotalBeforeRedemption={subtotalBeforeRedemption}
                 onChange={onRedeemPoints}
+                onUnavailableAction={onGuide}
                 disabled={!isAuthenticated}
               />
               <div className="mt-4 flex items-end justify-between">
@@ -966,9 +1059,10 @@ function BookingReviewPage({
 
               {(status.paymentError || status.error || stayDateError) ? <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{status.paymentError || status.error || stayDateError}</p> : null}
               <button
+                type="button"
                 className="btn-primary mt-5 w-full"
                 onClick={onPay}
-                disabled={status.loading || !selectedRoom || Boolean(stayDateError) || (isAuthenticated && (!form.guestEmail || !form.guestName || String(form.guestPhone || '').trim().length < 7))}
+                disabled={status.loading}
               >
                 {status.loading ? <Loader2 size={18} className="animate-spin" /> : isAuthenticated ? <CreditCard size={18} /> : <ChevronRight size={18} />}
                 {isAuthenticated ? `Pay Rs ${paymentDue.toLocaleString('en-IN')}` : 'Login / Sign up to Book'}
@@ -1002,7 +1096,21 @@ function PaymentOption({ active, title, amount, note, onClick }) {
   )
 }
 
-function LoyaltyRedeemControl({ availablePoints, maxRedeemablePoints, redeemPoints, discount, subtotalBeforeRedemption, onChange, disabled }) {
+function LoyaltyRedeemControl({ availablePoints, maxRedeemablePoints, redeemPoints, discount, subtotalBeforeRedemption, onChange, onUnavailableAction, disabled }) {
+  const cannotRedeem = disabled || maxRedeemablePoints < 1
+
+  function showUnavailableGuide() {
+    if (disabled) {
+      onUnavailableAction?.('Login required', 'Sign in or create your group account to use loyalty points.')
+      return
+    }
+    if (Number(availablePoints || 0) < 1) {
+      onUnavailableAction?.('You have 0 points now', 'Earn group loyalty points after a confirmed booking, then redeem them at any hotel.')
+      return
+    }
+    onUnavailableAction?.('No points available for this booking', `Points can be used when the subtotal is at least Rs 101 before tax.`)
+  }
+
   return (
     <div className="mt-4 rounded-lg border border-[#d8c7a5] bg-[#fff8ea] p-4 shadow-sm">
       <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
@@ -1013,27 +1121,33 @@ function LoyaltyRedeemControl({ availablePoints, maxRedeemablePoints, redeemPoin
         {discount ? <span className="rounded-md bg-white px-3 py-2 text-sm font-black text-emerald-800">- Rs {discount.toLocaleString('en-IN')}</span> : null}
       </div>
       <div className="mt-4 grid gap-3">
-        <input
-          type="range"
-          min="0"
-          max={maxRedeemablePoints}
-          value={redeemPoints}
-          onChange={(event) => onChange(Number(event.target.value))}
-          disabled={disabled || maxRedeemablePoints < 1}
-          className="w-full accent-[#7f1d1d] disabled:opacity-50"
-          aria-label="Redeem loyalty points"
-        />
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative">
           <input
-            className="input h-11 sm:max-w-36"
-            type="number"
+            type="range"
             min="0"
             max={maxRedeemablePoints}
             value={redeemPoints}
             onChange={(event) => onChange(Number(event.target.value))}
-            disabled={disabled || maxRedeemablePoints < 1}
-            aria-label="Loyalty points to redeem"
+            disabled={cannotRedeem}
+            className="w-full accent-[#7f1d1d] disabled:opacity-50"
+            aria-label="Redeem loyalty points"
           />
+          {cannotRedeem ? <button type="button" className="absolute inset-0 cursor-not-allowed rounded-md" aria-label="Why loyalty points cannot be redeemed" onClick={showUnavailableGuide} /> : null}
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative sm:max-w-36">
+            <input
+              className="input h-11"
+              type="number"
+              min="0"
+              max={maxRedeemablePoints}
+              value={redeemPoints}
+              onChange={(event) => onChange(Number(event.target.value))}
+              disabled={cannotRedeem}
+              aria-label="Loyalty points to redeem"
+            />
+            {cannotRedeem ? <button type="button" className="absolute inset-0 cursor-not-allowed rounded-md" aria-label="Why loyalty points cannot be redeemed" onClick={showUnavailableGuide} /> : null}
+          </div>
           <p className="text-xs font-semibold leading-5 text-stone-600">
             {disabled ? 'Login to redeem points.' : maxRedeemablePoints ? `Up to ${maxRedeemablePoints.toLocaleString('en-IN')} points can be used on this booking before tax.` : `No points can be used on Rs ${subtotalBeforeRedemption.toLocaleString('en-IN')} subtotal.`}
           </p>
@@ -1080,6 +1194,7 @@ function RoomDetails({ room, hotel, form, nights, amenities, offers, selectedOff
   const totalSaving = Math.max(0, roundMoney(regularSubtotal - estimatedTotal))
   const roomPriceSaving = room.offer_price ? Math.max(0, roundMoney((Number(room.base_price || 0) - Number(room.offer_price || 0)) * Math.max(nights, 1) * Number(form.roomsCount || 1))) : 0
   const effectiveNightPrice = roundMoney(grossSubtotal / Math.max(nights, 1) / Number(form.roomsCount || 1))
+  const selectedOfferVisual = selectedOffer ? getOfferVisual(selectedOffer) : null
   return (
     <main className="overflow-x-hidden bg-ivory">
       <section className="relative min-h-[42svh] overflow-hidden bg-charcoal text-white md:min-h-[50svh]">
@@ -1183,9 +1298,9 @@ function RoomDetails({ room, hotel, form, nights, amenities, offers, selectedOff
               {selectedAmenityItems.length ? <Line label="Amenities" value={`Rs ${amenitySubtotal.toLocaleString('en-IN')}`} /> : null}
               <Line label="Regular total with add-ons" value={`Rs ${regularSubtotal.toLocaleString('en-IN')}`} />
               {selectedOffer ? (
-                <div className="rounded-md border border-emerald-300 bg-white p-3">
-                  <Line label={selectedOffer.title} value={`- Rs ${offerDiscount.toLocaleString('en-IN')}`} />
-                  <p className="mt-1 text-xs font-bold text-emerald-800">{formatOfferValue(selectedOffer)} applied for this preview.</p>
+                <div className="rounded-md border border-white/70 p-3 text-white shadow-soft backdrop-blur-xl" style={{ backgroundImage: selectedOfferVisual.card }}>
+                  <InvertedLine label={selectedOffer.title} value={`- Rs ${offerDiscount.toLocaleString('en-IN')}`} />
+                  <p className="mt-1 text-xs font-bold text-white/82">{formatOfferValue(selectedOffer)} applied for this preview.</p>
                 </div>
               ) : null}
               <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
@@ -1286,6 +1401,10 @@ function Field({ label, children, className = '' }) {
 
 function Line({ label, value }) {
   return <div className="flex min-w-0 justify-between gap-4"><span className="min-w-0 break-words text-stone-500">{label}</span><span className="min-w-0 shrink-0 break-words text-right font-bold text-charcoal">{value}</span></div>
+}
+
+function InvertedLine({ label, value }) {
+  return <div className="flex min-w-0 justify-between gap-4"><span className="min-w-0 break-words text-white/76">{label}</span><span className="min-w-0 shrink-0 break-words text-right font-bold text-white">{value}</span></div>
 }
 
 function getRoomAmenityItems(room) {
@@ -1392,6 +1511,41 @@ function formatOfferValue(offer) {
   const value = Number(offer.discount_value || 0)
   if (offer.discount_type === 'percentage') return `${value}% off`
   return `Rs ${value.toLocaleString('en-IN')} off`
+}
+
+function getHotelHeroImages(hotel) {
+  const uploaded = Array.isArray(hotel?.branding?.heroImages)
+    ? hotel.branding.heroImages.map((item) => (typeof item === 'string' ? item : item?.url || item?.secureUrl)).filter(Boolean)
+    : []
+  return [...uploaded, hotel?.hero_image_url].filter(Boolean)
+}
+
+function getOfferVisual(offer) {
+  const themes = [
+    {
+      card: 'linear-gradient(135deg,rgba(74,17,26,0.96) 0%,rgba(127,29,29,0.88) 48%,rgba(245,158,11,0.74) 100%)',
+      compact: 'linear-gradient(135deg,rgba(74,17,26,0.96),rgba(180,83,9,0.86))',
+      shadow: '0 18px 44px rgba(127,29,29,0.24)',
+    },
+    {
+      card: 'linear-gradient(135deg,rgba(6,78,59,0.95) 0%,rgba(13,148,136,0.86) 50%,rgba(250,204,21,0.68) 100%)',
+      compact: 'linear-gradient(135deg,rgba(6,78,59,0.95),rgba(13,148,136,0.84))',
+      shadow: '0 18px 44px rgba(13,148,136,0.22)',
+    },
+    {
+      card: 'linear-gradient(135deg,rgba(49,46,129,0.95) 0%,rgba(126,34,206,0.82) 48%,rgba(244,114,182,0.72) 100%)',
+      compact: 'linear-gradient(135deg,rgba(49,46,129,0.95),rgba(126,34,206,0.84))',
+      shadow: '0 18px 44px rgba(126,34,206,0.2)',
+    },
+    {
+      card: 'linear-gradient(135deg,rgba(12,74,110,0.95) 0%,rgba(37,99,235,0.84) 48%,rgba(45,212,191,0.7) 100%)',
+      compact: 'linear-gradient(135deg,rgba(12,74,110,0.95),rgba(37,99,235,0.84))',
+      shadow: '0 18px 44px rgba(37,99,235,0.2)',
+    },
+  ]
+  const key = String(offer?.id || offer?.title || '')
+  const hash = Array.from(key).reduce((sum, char) => sum + char.charCodeAt(0), 0)
+  return themes[hash % themes.length]
 }
 
 function getBackgroundVideoSource(value) {
