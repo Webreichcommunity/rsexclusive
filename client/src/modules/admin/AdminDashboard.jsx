@@ -19,6 +19,7 @@ import {
   Pencil,
   Plus,
   Search,
+  Settings,
   Sparkles,
   Star,
   Tag,
@@ -26,7 +27,7 @@ import {
   UserRound,
   UsersRound,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { StatusPill } from '../../components/ui/StatusPill.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
@@ -44,6 +45,7 @@ const tabs = [
   { key: 'feedback', Icon: MessageSquare, label: 'Feedback', text: 'Guest messages' },
   { key: 'amenities', Icon: Sparkles, label: 'Amenities', text: 'Hotel add-ons' },
   { key: 'offers', Icon: Gift, label: 'Offers', text: 'Discount rules' },
+  { key: 'settings', Icon: Settings, label: 'Settings', text: 'Loyalty rules' },
 ]
 
 const profileOptions = [
@@ -105,6 +107,8 @@ const emptyManualBooking = {
   totalAmount: '',
 }
 
+const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
+
 export function AdminDashboard() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [activePage, setActivePage] = useState('summary')
@@ -120,6 +124,7 @@ export function AdminDashboard() {
   const [manualBooking, setManualBooking] = useState(emptyManualBooking)
   const [activeUser, setActiveUser] = useState(null)
   const [filters, setFilters] = useState({ rooms: '', bookings: '', bookingStatus: 'all', users: '', feedback: '', amenities: '', offers: '', offerAudience: 'all' })
+  const [settingsForm, setSettingsForm] = useState({ loyaltyRedemptionMinPoints: DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS })
 
   const dashboard = useAsync(() => apiFetch('/admin/dashboard'), refreshKey)
   const rooms = useAsync(() => apiFetch('/admin/rooms'), refreshKey)
@@ -417,13 +422,35 @@ export function AdminDashboard() {
     }
   }
 
-  if (dashboard.loading) return <LoadingState label="Loading hotel operations" />
-
   const metrics = dashboard.data?.metrics || {}
   const hotel = dashboard.data?.hotel || {}
+  const loyaltyRedemptionMinPoints = Math.max(0, Number(hotel.policies?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
   const hotelName = hotel.branding?.logoText || hotel.name || 'Hotel workspace'
   const hotelLogo = hotel.branding?.logoUrl || ''
   const hotelLocation = [hotel.address?.city, hotel.address?.state].filter(Boolean).join(', ')
+
+  useEffect(() => {
+    setSettingsForm({ loyaltyRedemptionMinPoints })
+  }, [loyaltyRedemptionMinPoints])
+
+  async function saveSettings(event) {
+    event.preventDefault()
+    setSaving(true)
+    try {
+      await apiFetch('/admin/hotel-settings', {
+        method: 'PATCH',
+        body: { loyaltyRedemptionMinPoints: Number(settingsForm.loyaltyRedemptionMinPoints || 0) },
+      })
+      refresh('Loyalty redemption settings updated.')
+    } catch (error) {
+      setNotice({ type: 'error', message: error.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (dashboard.loading) return <LoadingState label="Loading hotel operations" />
+
   const navCounts = {
     summary: 'Live',
     rooms: roomList.length,
@@ -433,6 +460,7 @@ export function AdminDashboard() {
     feedback: feedbackList.length,
     amenities: amenityList.length,
     offers: offerList.length,
+    settings: 'Rules',
   }
 
   function changePage(page) {
@@ -550,6 +578,7 @@ export function AdminDashboard() {
             {activePage === 'feedback' ? <FeedbackPanel feedback={feedbackList} filters={filters} setFilters={setFilters} /> : null}
             {activePage === 'amenities' ? <AmenitiesPanel amenities={amenityList} form={amenityForm} setForm={setAmenityForm} showForm={showAmenityForm} setShowForm={setShowAmenityForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveAmenity} onDelete={deleteAmenity} /> : null}
             {activePage === 'offers' ? <OffersPanel offers={offerList} form={offerForm} setForm={setOfferForm} showForm={showOfferForm} setShowForm={setShowOfferForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveOffer} onDelete={deleteOffer} /> : null}
+            {activePage === 'settings' ? <SettingsPanel form={settingsForm} setForm={setSettingsForm} saving={saving} onSave={saveSettings} /> : null}
           </div>
         </section>
       </div>
@@ -812,6 +841,50 @@ function CreateBookingPanel({ rooms, manualBooking, setManualBooking, saving, on
           <Field label="Children"><input className="input" type="number" min="0" value={manualBooking.children} onChange={(event) => setManualBooking({ ...manualBooking, children: event.target.value })} /></Field>
           <div className="flex items-end">
             <button className="btn-primary w-full" disabled={saving} type="submit"><ClipboardPlus size={18} /> {saving ? 'Creating...' : 'Create booking'}</button>
+          </div>
+        </div>
+      </form>
+    </section>
+  )
+}
+
+function SettingsPanel({ form, setForm, saving, onSave }) {
+  const threshold = Math.max(0, Number(form.loyaltyRedemptionMinPoints || 0))
+  const samplePoints = Math.max(0, threshold - 250)
+  const progress = threshold > 0 ? Math.min(100, Math.round((samplePoints / threshold) * 100)) : 100
+  return (
+    <section className="grid gap-3 sm:gap-6">
+      <form onSubmit={onSave} className="panel p-4 sm:p-5">
+        <PanelMiniTitle icon={Settings} title="Hotel loyalty settings" />
+        <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
+          <div className="grid gap-4">
+            <Field label="Minimum points before redemption">
+              <input
+                className="input"
+                type="number"
+                min="0"
+                step="1"
+                value={form.loyaltyRedemptionMinPoints}
+                onChange={(event) => setForm({ ...form, loyaltyRedemptionMinPoints: event.target.value })}
+              />
+            </Field>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <p className="text-sm font-extrabold text-amber-950">Guests can collect points immediately after confirmed bookings.</p>
+              <p className="mt-2 text-sm font-semibold leading-6 text-stone-700">Redemption will appear during checkout only after their group point balance reaches this minimum. Set 0 if redemption should be available for any positive balance.</p>
+            </div>
+            <button className="btn-primary w-full sm:w-fit" disabled={saving} type="submit">
+              <CheckCircle2 size={18} /> {saving ? 'Saving...' : 'Save loyalty rule'}
+            </button>
+          </div>
+          <div className="rounded-lg border border-white/70 bg-white/70 p-4 shadow-glass backdrop-blur-xl">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-stone-500">Guest account preview</p>
+            <p className="mt-2 text-2xl font-black text-charcoal">{samplePoints.toLocaleString('en-IN')} / {threshold.toLocaleString('en-IN')} pts</p>
+            <div className="mt-4 overflow-hidden rounded-full bg-bone shadow-inner">
+              <div className="h-3 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)]" style={{ width: `${progress}%` }} />
+            </div>
+            <p className="mt-3 text-sm font-semibold leading-6 text-stone-600">
+              {threshold ? `${Math.max(0, threshold - samplePoints).toLocaleString('en-IN')} more points needed before checkout redemption opens.` : 'Any available points can be redeemed during checkout.'}
+            </p>
           </div>
         </div>
       </form>
@@ -1460,6 +1533,7 @@ function activePageTitle(page) {
     feedback: 'Feedback inbox',
     amenities: 'Amenity catalog',
     offers: 'Offer management',
+    settings: 'Hotel settings',
   }
   return titles[page] || 'Hotel admin'
 }

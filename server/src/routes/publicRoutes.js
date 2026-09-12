@@ -13,6 +13,11 @@ import { badRequest, conflict, forbidden, unauthorized } from '../utils/errors.j
 
 export const publicRoutes = createAsyncRouter()
 const publicCache = createCache(60_000)
+const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
+
+function getLoyaltyRedemptionMinPoints(hotel) {
+  return Math.max(0, Number(hotel?.policies?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
+}
 
 function requireActiveHotel(req, _res, next) {
   if (req.hotel && req.hotel.status !== 'active') {
@@ -47,6 +52,9 @@ const registerSchema = z.object({
   fullName: z.string().min(2).max(120),
   phone: z.string().max(24).optional(),
   photoUrl: z.string().url().max(500).optional(),
+  termsAccepted: z.literal(true),
+  termsVersion: z.string().min(4).max(40),
+  termsAcceptedAt: z.string().datetime().optional(),
 })
 
 const profileSchema = z.object({
@@ -152,6 +160,12 @@ publicRoutes.post('/auth/register', optionalTenant, requireActiveHotel, validate
           JSON.stringify({
             ...(existingRows[0].profile || {}),
             photoUrl: req.body.photoUrl || existingRows[0].profile?.photoUrl || firebaseUser.picture || '',
+            termsAndConditions: {
+              accepted: true,
+              version: req.body.termsVersion,
+              acceptedAt: req.body.termsAcceptedAt || new Date().toISOString(),
+              source: 'guest_registration',
+            },
           }),
           existingRows[0].id,
         ],
@@ -167,7 +181,15 @@ publicRoutes.post('/auth/register', optionalTenant, requireActiveHotel, validate
           firebaseUser.email,
           req.body.fullName,
           req.body.phone || null,
-          JSON.stringify({ photoUrl: req.body.photoUrl || firebaseUser.picture || '' }),
+          JSON.stringify({
+            photoUrl: req.body.photoUrl || firebaseUser.picture || '',
+            termsAndConditions: {
+              accepted: true,
+              version: req.body.termsVersion,
+              acceptedAt: req.body.termsAcceptedAt || new Date().toISOString(),
+              source: 'guest_registration',
+            },
+          }),
           req.hotel.id,
         ],
       )
@@ -260,6 +282,7 @@ publicRoutes.get('/me', optionalTenant, authenticate, async (req, res) => {
       role: req.user.role,
       hotel: hotelAdminHotel,
       loyaltyPoints: loyaltyRows[0]?.points || 0,
+      loyaltyRedemptionMinPoints: getLoyaltyRedemptionMinPoints(req.hotel),
     },
   })
 })

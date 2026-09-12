@@ -32,6 +32,7 @@ const profileOptions = [
   { avatar: 'avatar-female', gender: 'female', label: 'Female', Icon: CircleUserRound },
   { avatar: 'avatar-transgender', gender: 'transgender', label: 'Transgender', Icon: Accessibility },
 ]
+const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
 
 export function AccountPage() {
   const { isAuthenticated, firebaseUser, loading: authLoading } = useAuth()
@@ -95,6 +96,10 @@ export function AccountPage() {
 
   const displayName = profileForm.fullName || firebaseUser?.displayName || firebaseUser?.email || 'Guest'
   const points = Number(appUser.data?.user?.loyaltyPoints || 0)
+  const redemptionMinPoints = Math.max(0, Number(appUser.data?.user?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
+  const redemptionProgress = redemptionMinPoints > 0 ? Math.min(100, Math.round((points / redemptionMinPoints) * 100)) : 100
+  const pointsToUnlock = Math.max(0, redemptionMinPoints - points)
+  const redemptionUnlocked = points >= redemptionMinPoints
 
   return (
     <main className="overflow-hidden bg-ivory">
@@ -132,9 +137,25 @@ export function AccountPage() {
       <section className="container-page -mt-8 pb-16 md:pb-24">
         <div className="grid gap-4 sm:grid-cols-3">
           <MetricCard icon={CalendarDays} label="Bookings" value={bookingStats.bookings} text="Across all hotels" />
-          <MetricCard icon={Gift} label="Redeemable points" value={points.toLocaleString('en-IN')} text="Use at any hotel checkout" />
+          <MetricCard icon={Gift} label="Group points" value={points.toLocaleString('en-IN')} text={redemptionUnlocked ? 'Eligible to redeem at checkout' : `Unlocks at ${redemptionMinPoints.toLocaleString('en-IN')} points`} />
           <MetricCard icon={Sparkles} label="Paid value" value={`Rs ${compactMoney(bookingStats.paid)}`} text="Confirmed payment value" />
         </div>
+
+        <FadeIn viewport={false} className="mt-5 rounded-lg border border-white/70 bg-white/80 p-4 shadow-glass backdrop-blur-xl">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+            <div>
+              <p className="eyebrow">Redemption eligibility</p>
+              <h2 className="mt-1 text-2xl font-black text-charcoal">{redemptionUnlocked ? 'Redeem points on your next booking' : 'Keep collecting group points'}</h2>
+            </div>
+            <span className="w-fit rounded-md bg-amber-50 px-3 py-2 text-sm font-black text-amber-900">{points.toLocaleString('en-IN')} / {redemptionMinPoints.toLocaleString('en-IN')} pts</span>
+          </div>
+          <div className="mt-4 overflow-hidden rounded-full bg-bone shadow-inner">
+            <div className="h-3 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)] transition-all duration-500" style={{ width: `${redemptionProgress}%` }} />
+          </div>
+          <p className="mt-3 text-sm font-semibold leading-6 text-stone-600">
+            {redemptionUnlocked ? 'The redeem option will appear automatically on checkout when your booking total can use points.' : `${pointsToUnlock.toLocaleString('en-IN')} more point${pointsToUnlock === 1 ? '' : 's'} needed before the redeem option appears during checkout.`}
+          </p>
+        </FadeIn>
 
         {error ? <p className="mt-6 rounded-md bg-red-50 p-3 text-red-700">{error.message}</p> : null}
         <section className="mt-8">

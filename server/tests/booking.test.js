@@ -35,12 +35,12 @@ test('calculatePaymentPlan charges the full booking total by default', () => {
   })
 })
 
-test('calculatePaymentPlan supports a 25 percent partial advance', () => {
+test('calculatePaymentPlan supports a 50 percent partial advance', () => {
   assert.deepEqual(calculatePaymentPlan(20160, 'partial'), {
     mode: 'partial',
-    advancePercent: 25,
-    paidAmount: 5040,
-    balanceDue: 15120,
+    advancePercent: 50,
+    paidAmount: 10080,
+    balanceDue: 10080,
   })
 })
 
@@ -56,6 +56,14 @@ test('calculateLoyaltyRedemption caps by balance and keeps a payable amount', ()
   assert.deepEqual(calculateLoyaltyRedemption(50, 30, 3000), {
     points: 29,
     amount: 2900,
+    pointValue: 100,
+  })
+})
+
+test('calculateLoyaltyRedemption requires the configured minimum balance', () => {
+  assert.deepEqual(calculateLoyaltyRedemption(8, 900, 2500, 100, 1000), {
+    points: 0,
+    amount: 0,
     pointValue: 100,
   })
 })

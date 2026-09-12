@@ -2,11 +2,9 @@ import {
   Bath,
   BedDouble,
   CalendarDays,
-  ChevronLeft,
-  ChevronRight,
   Dumbbell,
   Gift,
-  MapPin,
+  Maximize2,
   Minus,
   Plus,
   Sparkles,
@@ -21,6 +19,8 @@ import { FadeIn, Stagger, StaggerItem } from '../../components/ui/Motion.jsx'
 import { AutoScrollRow } from '../../components/ui/AutoScrollRow.jsx'
 import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { Seo } from '../../components/seo/Seo.jsx'
+import { ImageLightbox } from '../../components/ui/ImageLightbox.jsx'
+import { StayDateRangePicker } from '../../components/ui/StayDateRangePicker.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { buildTenantPath, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
@@ -77,16 +77,16 @@ export function HotelExperience() {
         }}
       />
 
-      <section id="hotel" className="relative -mt-[72px] min-h-[100svh] overflow-hidden pt-[72px]">
-        <div className="container-page relative grid min-h-[calc(100svh-72px)] items-center gap-8 pb-10 pt-16 sm:pt-20 lg:grid-cols-[1fr_440px] lg:pt-16">
+      <section id="hotel" className="relative -mt-[72px] min-h-[100svh] overflow-hidden pt-[112px] sm:pt-[72px]">
+        <div className="container-page relative grid min-h-[calc(100svh-112px)] items-center gap-8 pb-10 pt-10 sm:min-h-[calc(100svh-72px)] sm:pt-20 lg:grid-cols-[1fr_440px] lg:pt-16">
           <FadeIn viewport={false} className="max-w-3xl text-white">
             <h1 className="max-w-4xl text-5xl font-black leading-[0.98] text-white drop-shadow-[0_6px_26px_rgba(0,0,0,0.55)] md:text-7xl">
               {cleanHotelName(hotel.name)}
             </h1>
             <p className="mt-6 max-w-2xl text-base font-medium leading-8 text-white/88 md:text-lg">{premiumHotelSummary(hotel)}</p>
             <div className="mt-8 flex flex-wrap gap-3 text-sm font-semibold text-white/90">
-              <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-amberline/88 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><MapPin size={16} className="text-amber-100" /> Exclusive Stay & Fine Dine</span>
-              <span className="rounded-md border border-white/18 bg-zinc-900/70 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl">{rooms.length} room categor{rooms.length === 1 ? 'y' : 'ies'}</span>
+              <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-amberline/88 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><CalendarDays size={16} className="text-amber-100" /> 24 hours check-in</span>
+              <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-zinc-900/70 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><Utensils size={16} className="text-amber-100" /> Breakfast available</span>
             </div>
           </FadeIn>
 
@@ -98,8 +98,14 @@ export function HotelExperience() {
               <p className="text-xs font-black uppercase tracking-[0.16em] text-amber-100">Reserve directly</p>
               <h2 className="mt-2 text-2xl font-black text-white">Plan your stay</h2>
               <div className="mt-4 grid grid-cols-2 gap-3">
-                <DatePicker label="Check-in" value={search.checkIn} onChange={(value) => setSearch((current) => ({ ...current, checkIn: value }))} />
-                <DatePicker label="Check-out" value={search.checkOut} min={addDays(search.checkIn, 1)} onChange={(value) => setSearch((current) => ({ ...current, checkOut: value }))} />
+                <StayDateRangePicker
+                  className="col-span-2"
+                  checkIn={search.checkIn}
+                  checkOut={search.checkOut}
+                  onCheckInChange={(value) => setSearch((current) => ({ ...current, checkIn: value }))}
+                  onCheckOutChange={(value) => setSearch((current) => ({ ...current, checkOut: value }))}
+                  onRangeChange={(checkIn, checkOut) => setSearch((current) => ({ ...current, checkIn, checkOut }))}
+                />
                 <Field label="Adults"><Stepper value={search.adults} min={1} onChange={(value) => setSearch({ ...search, adults: value })} /></Field>
                 <Field label="Children"><Stepper value={search.children} min={0} onChange={(value) => setSearch({ ...search, children: value })} /></Field>
                 <Field label="Rooms" className="col-span-2 sm:col-span-1"><Stepper value={search.roomsCount} min={1} onChange={(value) => setSearch({ ...search, roomsCount: value })} /></Field>
@@ -327,8 +333,8 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
   const possibleLoyaltyPoints = Math.max(0, Math.floor(Number(displayPrice || 0) / 100))
   return (
     <StaggerItem>
-      <article className="group grid overflow-hidden rounded-lg border border-stone-200 bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:border-amberline/30 hover:shadow-card md:grid-cols-[240px_minmax(0,1fr)_225px] lg:grid-cols-[280px_minmax(0,1fr)_235px]">
-        <div className="image-lift h-48 rounded-none border-0 sm:h-52 md:h-full md:min-h-[15.5rem]">
+      <article className="group grid overflow-visible rounded-lg border border-stone-200 bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:border-amberline/35 hover:shadow-card md:grid-cols-[minmax(220px,0.9fr)_minmax(0,1.35fr)] xl:grid-cols-[minmax(280px,0.95fr)_minmax(0,1.4fr)_240px]">
+        <div className="image-lift h-56 rounded-none border-0 sm:h-64 md:h-full md:min-h-[18rem]">
           <RotatingRoomImage room={room} className="h-full w-full object-cover" />
         </div>
         <div className="flex min-w-0 flex-col gap-3 p-4 sm:p-5">
@@ -347,10 +353,10 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
             </div>
           </div>
         </div>
-        <div className="flex flex-col justify-between border-t border-emerald-200 bg-[linear-gradient(180deg,#ecfdf5_0%,#ffffff_100%)] p-4 md:border-l md:border-t-0">
-          <div className="grid grid-cols-[auto_1fr] items-start gap-3 md:block">
+        <div className="flex flex-col justify-between border-t border-emerald-200 bg-[linear-gradient(180deg,#ecfdf5_0%,#ffffff_100%)] p-4 md:col-span-2 xl:col-span-1 xl:border-l xl:border-t-0">
+          <div className="grid grid-cols-[auto_1fr] items-start gap-3 xl:block">
             <span className="w-fit rounded-md bg-white px-3 py-2 text-xs font-bold text-stone-600 shadow-sm">{room.size_sqft || 'Spacious'} sq ft</span>
-            <div className="min-w-0 text-right md:mt-3 md:text-left">
+            <div className="min-w-0 text-right xl:mt-3 xl:text-left">
               {room.offer_price ? <p className="text-xs font-bold text-stone-500 line-through sm:text-sm">Rs {Number(room.base_price).toLocaleString('en-IN')}</p> : null}
               <p className="text-2xl font-black leading-none text-emerald-800 sm:text-3xl">Rs {Number(displayPrice).toLocaleString('en-IN')}</p>
               <p className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">per night</p>
@@ -376,10 +382,15 @@ function HomeRoomOfferPicker({ offers, availabilityUrl }) {
           <Link
             key={offer.id || offer.title}
             to={appendQueryParam(availabilityUrl, 'offerId', offer.id)}
-            className="w-40 shrink-0 snap-start rounded-md border border-stone-200 bg-bone/60 px-3 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-soft sm:w-auto"
+            className="group/offer relative w-40 shrink-0 snap-start rounded-md border border-stone-200 bg-bone/60 px-3 py-2 text-left transition hover:-translate-y-0.5 hover:border-amberline/35 hover:bg-white hover:shadow-soft focus:outline-none focus:ring-2 focus:ring-amberline/20 sm:w-auto"
           >
             <span className="line-clamp-1 text-xs font-extrabold text-charcoal">{offer.title}</span>
             <span className="mt-1 block text-xs font-black text-emerald-800">{formatOfferValue(offer)}</span>
+            <span className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] left-0 z-20 hidden w-64 rounded-md border border-white/70 bg-charcoal p-3 text-white opacity-0 shadow-card transition duration-200 group-hover/offer:block group-hover/offer:opacity-100 group-focus/offer:block group-focus/offer:opacity-100">
+              <span className="block text-xs font-black uppercase text-amber-100">{offer.badge || 'Offer details'}</span>
+              <span className="mt-1 block text-sm font-extrabold">{offer.title}</span>
+              <span className="mt-1 block text-xs font-semibold leading-5 text-white/76">{offer.description}</span>
+            </span>
           </Link>
         ))}
       </div>
@@ -391,6 +402,7 @@ function HomeRoomOfferPicker({ offers, availabilityUrl }) {
 function RotatingRoomImage({ room, className }) {
   const images = useMemo(() => getRoomImages(room), [room])
   const [index, setIndex] = useState(0)
+  const [openImageIndex, setOpenImageIndex] = useState(null)
   const [pausedUntil, setPausedUntil] = useState(0)
   const paused = pausedUntil > Date.now()
 
@@ -406,8 +418,15 @@ function RotatingRoomImage({ room, className }) {
     return () => window.clearInterval(timer)
   }, [images.length, paused])
 
+  function openFullImage(event) {
+    event.stopPropagation()
+    setPausedUntil(Date.now() + 60_000)
+    setOpenImageIndex(index)
+  }
+
   return (
-    <button className="relative block h-full w-full overflow-hidden bg-stone-200 text-left" type="button" aria-label="Pause room image rotation" onClick={() => setPausedUntil(Date.now() + 5000)}>
+    <div className="relative h-full w-full overflow-hidden bg-stone-200">
+      <button className="relative block h-full w-full text-left" type="button" aria-label="Pause room image rotation" onClick={() => setPausedUntil(Date.now() + 5000)}>
       {images.map((image, imageIndex) => (
         <img
           key={image.url}
@@ -417,7 +436,32 @@ function RotatingRoomImage({ room, className }) {
           className={`absolute inset-0 transition-opacity duration-700 ease-out ${className} ${imageIndex === index ? 'opacity-100' : 'opacity-0'}`}
         />
       ))}
-    </button>
+      </button>
+      <button
+        type="button"
+        className="absolute bottom-3 right-3 inline-flex min-h-10 items-center gap-2 rounded-md border border-white/40 bg-black/45 px-3 text-xs font-black text-white shadow-soft backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-black/62"
+        onClick={openFullImage}
+      >
+        <Maximize2 size={15} /> View full image
+      </button>
+      {images.length > 1 ? (
+        <div className="absolute bottom-3 left-3 flex gap-1.5">
+          {images.map((image, imageIndex) => (
+            <span key={`${image.url}-dot`} className={`h-1.5 w-5 rounded-full ${imageIndex === index ? 'bg-white' : 'bg-white/45'}`} />
+          ))}
+        </div>
+      ) : null}
+      {openImageIndex !== null ? (
+        <ImageLightbox
+          images={images}
+          index={openImageIndex}
+          title={room.name}
+          fallbackImage={fallbackRoomImage}
+          onIndex={setOpenImageIndex}
+          onClose={() => setOpenImageIndex(null)}
+        />
+      ) : null}
+    </div>
   )
 }
 
@@ -475,64 +519,6 @@ function Feature({ icon: Icon, title, text }) {
   )
 }
 
-function DatePicker({ label, value, min, onChange, className = '' }) {
-  const [open, setOpen] = useState(false)
-  const current = parseDate(value) || new Date()
-  const [viewDate, setViewDate] = useState(new Date(current.getFullYear(), current.getMonth(), 1))
-  const days = useMemo(() => calendarDays(viewDate), [viewDate])
-  const minDate = min ? parseDate(min) : null
-
-  function selectDay(day) {
-    if (!day || (minDate && startOfDay(day) < startOfDay(minDate))) return
-    onChange(toDateValue(day))
-    setOpen(false)
-  }
-
-  return (
-    <label className={`relative min-w-0 ${className}`}>
-      <span className="label">{label}</span>
-      <button type="button" className="date-button" onClick={() => setOpen((next) => !next)}>
-        <CalendarDays size={18} className="text-amberline" />
-        <span>{formatDateLabel(value)}</span>
-      </button>
-      {open ? (
-        <motion.div
-          className="fixed left-4 right-4 top-24 z-[80] rounded-lg border border-mist bg-white p-3 text-charcoal shadow-panel sm:absolute sm:left-0 sm:right-auto sm:top-[4.5rem] sm:w-[min(19rem,calc(100vw-2rem))]"
-          initial={{ opacity: 0, y: 8, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.2 }}
-        >
-          <div className="mb-3 flex items-center justify-between">
-            <button type="button" className="calendar-nav" onClick={() => setViewDate(addMonths(viewDate, -1))} aria-label="Previous month"><ChevronLeft size={17} /></button>
-            <p className="text-sm font-extrabold text-charcoal">{viewDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</p>
-            <button type="button" className="calendar-nav" onClick={() => setViewDate(addMonths(viewDate, 1))} aria-label="Next month"><ChevronRight size={17} /></button>
-          </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-[0.68rem] font-black uppercase text-stone-400">
-            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}
-          </div>
-          <div className="mt-2 grid grid-cols-7 gap-1">
-            {days.map((day, index) => {
-              const disabled = !day || (minDate && startOfDay(day) < startOfDay(minDate))
-              const selected = day && toDateValue(day) === value
-              return (
-                <button
-                  key={day ? toDateValue(day) : `empty-${index}`}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => selectDay(day)}
-                  className={`calendar-day ${selected ? 'calendar-day-active' : ''}`}
-                >
-                  {day?.getDate() || ''}
-                </button>
-              )
-            })}
-          </div>
-        </motion.div>
-      ) : null}
-    </label>
-  )
-}
-
 function Field({ label, children, className = '' }) {
   return <label className={`min-w-0 ${className}`}><span className="label">{label}</span>{children}</label>
 }
@@ -567,46 +553,4 @@ function TenantError({ error }) {
 function getMediaUrls(items) {
   if (!Array.isArray(items)) return []
   return items.map((item) => (typeof item === 'string' ? item : item?.url || item?.secureUrl)).filter(Boolean)
-}
-
-function formatDateLabel(value) {
-  const date = parseDate(value)
-  if (!date) return 'Select date'
-  return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-}
-
-function calendarDays(date) {
-  const first = new Date(date.getFullYear(), date.getMonth(), 1)
-  const total = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
-  const days = Array.from({ length: first.getDay() }, () => null)
-  for (let day = 1; day <= total; day += 1) days.push(new Date(date.getFullYear(), date.getMonth(), day))
-  return days
-}
-
-function addMonths(date, months) {
-  return new Date(date.getFullYear(), date.getMonth() + months, 1)
-}
-
-function parseDate(value) {
-  if (!value) return null
-  const date = new Date(`${value}T00:00:00`)
-  return Number.isNaN(date.getTime()) ? null : date
-}
-
-function startOfDay(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
-}
-
-function toDateValue(date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function addDays(dateString, days) {
-  const date = parseDate(dateString)
-  if (!date) return ''
-  date.setDate(date.getDate() + days)
-  return toDateValue(date)
 }

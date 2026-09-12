@@ -1,17 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Bath, BedDouble, CalendarCheck, CalendarDays, Check, ChevronLeft, ChevronRight, CreditCard, Gift, Loader2, Minus, Plus, ShieldCheck, UsersRound } from 'lucide-react'
+import { Bath, BedDouble, CalendarCheck, Check, ChevronRight, CreditCard, Gift, Loader2, Maximize2, Minus, Plus, ShieldCheck, UsersRound } from 'lucide-react'
 import { FadeIn, Stagger, StaggerItem } from '../../components/ui/Motion.jsx'
 import { AutoScrollRow } from '../../components/ui/AutoScrollRow.jsx'
 import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { GuideToast } from '../../components/ui/GuideToast.jsx'
+import { ImageLightbox } from '../../components/ui/ImageLightbox.jsx'
+import { StayDateRangePicker } from '../../components/ui/StayDateRangePicker.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { useAuth } from '../auth/authContext.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { buildTenantPath, getSavedTenantKey, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
 
 const fallbackRoomImage = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1400&q=80'
+const PARTIAL_PAYMENT_PERCENT = 50
+const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
+const bookingAuthDraftKey = 'rs-exclusive-booking-auth-return'
+const bookingAuthDraftMaxAgeMs = 60 * 60 * 1000
 
 function defaultDates() {
   const start = new Date()
@@ -27,6 +33,28 @@ function queryValue(params, key, fallback) {
 
 function queryList(params, key) {
   return String(params.get(key) || '').split(',').map((value) => value.trim()).filter(Boolean)
+}
+
+function removeBookingAuthDraft() {
+  try {
+    window.sessionStorage.removeItem(bookingAuthDraftKey)
+  } catch {
+    // Session storage can be unavailable in restricted browser modes.
+  }
+}
+
+function readBookingAuthDraft() {
+  try {
+    const draft = JSON.parse(window.sessionStorage.getItem(bookingAuthDraftKey) || 'null')
+    if (!draft?.savedAt || Date.now() - Number(draft.savedAt) > bookingAuthDraftMaxAgeMs) {
+      removeBookingAuthDraft()
+      return null
+    }
+    return draft
+  } catch {
+    removeBookingAuthDraft()
+    return null
+  }
 }
 
 export function BookingPage() {
@@ -57,6 +85,7 @@ export function BookingPage() {
   const guideToastTimer = useRef(null)
   const roomsSectionRef = useRef(null)
   const initialAvailabilityLoaded = useRef(false)
+  const authDraftRestored = useRef(false)
   const defaultOfferApplied = useRef(false)
   const loadAvailabilityRef = useRef(null)
   const { data, loading, error } = useAsync(() => apiFetch('/tenant'), authLoading ? 'auth-loading' : `${firebaseUser?.uid || 'guest'}:${firebaseUser?.emailVerified ? 'verified' : 'unverified'}`)
@@ -66,6 +95,8 @@ export function BookingPage() {
   const bookableAmenities = useMemo(() => data?.amenities || [], [data])
   const offers = useMemo(() => data?.offers || [], [data])
   const availableLoyaltyPoints = Number(data?.loyaltyPoints || 0)
+  const loyaltyRedemptionMinPoints = Math.max(0, Number(data?.hotel?.policies?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
+  const loyaltyRedeemEligible = availableLoyaltyPoints >= loyaltyRedemptionMinPoints
   const selectedOffer = useMemo(
     () => offers.find((offer) => offer.id === selectedOfferId) || null,
     [offers, selectedOfferId],
@@ -82,7 +113,6 @@ export function BookingPage() {
   )
   const nights = useMemo(() => nightsBetween(form.checkIn, form.checkOut), [form.checkIn, form.checkOut])
   const stayDateError = useMemo(() => getStayDateError(form.checkIn, form.checkOut), [form.checkIn, form.checkOut])
-  const minCheckOut = useMemo(() => addDays(form.checkIn, 1), [form.checkIn])
   const priceRoom = selectedRoom || detailRoom
   const selectedAmenityItems = useMemo(
     () => getSelectedAmenityItems(priceRoom, bookableAmenities, selectedAmenityIds),
@@ -94,13 +124,13 @@ export function BookingPage() {
   const grossSubtotal = roundMoney(roomSubtotal + amenitySubtotal)
   const offerDiscount = calculateOfferDiscount(selectedOffer, grossSubtotal)
   const subtotalBeforeRedemption = Math.max(0, roundMoney(grossSubtotal - offerDiscount))
-  const maxRedeemablePoints = Math.min(availableLoyaltyPoints, Math.floor(Math.max(0, subtotalBeforeRedemption - 1) / 100))
+  const maxRedeemablePoints = loyaltyRedeemEligible ? Math.min(availableLoyaltyPoints, Math.floor(Math.max(0, subtotalBeforeRedemption - 1) / 100)) : 0
   const appliedRedeemPoints = Math.min(Math.max(0, Number(redeemPoints || 0)), maxRedeemablePoints)
   const loyaltyDiscount = roundMoney(appliedRedeemPoints * 100)
   const subtotal = Math.max(0, roundMoney(subtotalBeforeRedemption - loyaltyDiscount))
   const tax = data?.hotel ? roundMoney((subtotal * Number(data.hotel.tax_rate || 0)) / 100) : 0
   const total = roundMoney(subtotal + tax)
-  const paymentDue = paymentMode === 'partial' ? roundMoney(total * 0.25) : total
+  const paymentDue = paymentMode === 'partial' ? roundMoney(total * (PARTIAL_PAYMENT_PERCENT / 100)) : total
   const balanceDue = roundMoney(total - paymentDue)
   const loyaltyPoints = Math.floor(total / 100)
 
@@ -137,6 +167,37 @@ export function BookingPage() {
       }))
     }
   }, [firebaseUser, form.guestEmail])
+
+  useEffect(() => {
+    if (authDraftRestored.current || authLoading || !isAuthenticated) return
+    authDraftRestored.current = true
+    const draft = readBookingAuthDraft()
+    if (!draft) return
+
+    const tenant = resolveTenantFromLocation()
+    const currentHotelKey = params.get('hotel') || tenant.key || getSavedTenantKey() || ''
+    if (draft.hotelKey && currentHotelKey && draft.hotelKey !== currentHotelKey) return
+
+    if (draft.form) {
+      setForm((current) => ({
+        ...current,
+        checkIn: draft.form.checkIn || current.checkIn,
+        checkOut: draft.form.checkOut || current.checkOut,
+        roomsCount: Number(draft.form.roomsCount || current.roomsCount || 1),
+        adults: Number(draft.form.adults || current.adults || 1),
+        children: Number(draft.form.children || current.children || 0),
+        guestName: draft.form.guestName || current.guestName,
+        guestEmail: draft.form.guestEmail || current.guestEmail,
+        guestPhone: draft.form.guestPhone || current.guestPhone,
+      }))
+    }
+    if (draft.selectedRoomId) setSelectedRoomId(draft.selectedRoomId)
+    if (typeof draft.selectedOfferId === 'string') setSelectedOfferId(draft.selectedOfferId)
+    if (Array.isArray(draft.selectedAmenityIds)) setSelectedAmenityIds(draft.selectedAmenityIds)
+    setRedeemPoints(Math.max(0, Number(draft.redeemPoints || 0)))
+    setPaymentMode(draft.paymentMode === 'partial' ? 'partial' : 'full')
+    removeBookingAuthDraft()
+  }, [authLoading, isAuthenticated, params])
 
   useEffect(() => {
     if (!selectedRoomId && allRooms[0]) {
@@ -217,6 +278,10 @@ export function BookingPage() {
     updateStayForm({ ...form, checkOut })
   }
 
+  function updateDateRange(checkIn, checkOut) {
+    updateStayForm({ ...form, checkIn, checkOut })
+  }
+
   function chooseOffer(offerId) {
     const nextOfferId = selectedOfferId === offerId ? '' : offerId
     setSelectedOfferId(nextOfferId)
@@ -245,13 +310,14 @@ export function BookingPage() {
 
   async function loadAvailability(options = {}) {
     const preferredRoomId = options.preferredRoomId ?? selectedRoomId
+    const preservedStep = ['details', 'review'].includes(options.step) ? options.step : ['details', 'review'].includes(step) ? step : undefined
     const dateError = getStayDateError(form.checkIn, form.checkOut)
     if (dateError) {
       setStatus({ loading: false, error: dateError, paymentError: '' })
       return null
     }
     setStatus({ loading: true, error: '', paymentError: '' })
-    syncUrl(form, preferredRoomId)
+    syncUrl(form, preferredRoomId, { step: preservedStep })
     try {
       const search = new URLSearchParams({
         checkIn: form.checkIn,
@@ -267,7 +333,7 @@ export function BookingPage() {
       const firstRoom = payload.rooms[0]
       const nextRoomId = selectedStillAvailable ? preferredRoomId : firstRoom?.id || ''
       setSelectedRoomId(nextRoomId)
-      syncUrl(form, nextRoomId)
+      syncUrl(form, nextRoomId, { step: preservedStep })
       setStatus({ loading: false, error: payload.rooms.length || options.silent ? '' : 'No rooms are available for those dates. Try another date range.', paymentError: '' })
       return { rooms: payload.rooms, nextRoomId }
     } catch (err) {
@@ -302,10 +368,10 @@ export function BookingPage() {
       return
     }
     setSelectedRoomId(room.id)
-    const next = syncUrl(form, room.id, { step: 'review' })
+    const nextStep = !isAuthenticated && step === 'details' ? 'details' : 'review'
+    const next = syncUrl(form, room.id, { step: nextStep })
     if (!isAuthenticated) {
-      const returnTo = encodeURIComponent(`${location.pathname}?${next.toString()}`)
-      navigate(buildTenantPath(`/login?mode=register&returnTo=${returnTo}`, resolveTenantFromLocation()))
+      navigateToBookingAuth(next)
       return
     }
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -330,10 +396,35 @@ export function BookingPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  function requireLogin() {
-    const next = syncUrl(form, selectedRoomId)
-    const returnTo = encodeURIComponent(`${location.pathname}?${next.toString()}`)
+  function saveBookingAuthDraft(nextParams) {
+    const tenant = resolveTenantFromLocation()
+    const hotelKey = nextParams.get('hotel') || tenant.key || getSavedTenantKey() || ''
+    try {
+      window.sessionStorage.setItem(bookingAuthDraftKey, JSON.stringify({
+        savedAt: Date.now(),
+        hotelKey,
+        returnTo: `${location.pathname}?${nextParams.toString()}`,
+        form,
+        selectedRoomId: nextParams.get('roomTypeId') || selectedRoomId,
+        selectedOfferId: nextParams.get('offerId') || selectedOfferId,
+        selectedAmenityIds: queryList(nextParams, 'amenities'),
+        redeemPoints: Math.max(0, Number(nextParams.get('redeemPoints') || redeemPoints || 0)),
+        paymentMode: nextParams.get('paymentMode') === 'partial' ? 'partial' : paymentMode,
+      }))
+    } catch {
+      // Session storage can be unavailable in restricted browser modes.
+    }
+  }
+
+  function navigateToBookingAuth(nextParams) {
+    saveBookingAuthDraft(nextParams)
+    const returnTo = encodeURIComponent(`${location.pathname}?${nextParams.toString()}`)
     navigate(buildTenantPath(`/login?mode=register&returnTo=${returnTo}`, resolveTenantFromLocation()))
+  }
+
+  function requireLogin() {
+    const next = syncUrl(form, selectedRoomId, { step: step === 'review' || step === 'details' ? step : 'review' })
+    navigateToBookingAuth(next)
   }
 
   async function proceedToPayment() {
@@ -519,6 +610,8 @@ export function BookingPage() {
         redeemPoints={appliedRedeemPoints}
         maxRedeemablePoints={maxRedeemablePoints}
         availableLoyaltyPoints={availableLoyaltyPoints}
+        loyaltyRedemptionMinPoints={loyaltyRedemptionMinPoints}
+        loyaltyRedeemEligible={loyaltyRedeemEligible}
         tax={tax}
         total={total}
         paymentMode={paymentMode}
@@ -561,8 +654,7 @@ export function BookingPage() {
       <section className="container-page -mt-8 pb-16 md:pb-24">
         <FadeIn viewport={false} className="relative z-20">
           <form onSubmit={searchRooms} className="glass-panel grid grid-cols-2 gap-3 p-4 lg:grid-cols-[1fr_1fr_0.8fr_0.8fr_0.8fr_auto] lg:items-end">
-            <DatePicker label="Check-in" value={form.checkIn} onChange={updateCheckIn} />
-            <DatePicker label="Check-out" value={form.checkOut} min={minCheckOut} onChange={updateCheckOut} />
+            <StayDateRangePicker className="col-span-2 lg:col-span-2" checkIn={form.checkIn} checkOut={form.checkOut} onCheckInChange={updateCheckIn} onCheckOutChange={updateCheckOut} onRangeChange={updateDateRange} />
             <Field label="Adults"><Stepper value={form.adults} min={1} onChange={(value) => updateStayForm({ ...form, adults: value })} /></Field>
             <Field label="Children"><Stepper value={form.children} min={0} onChange={(value) => updateStayForm({ ...form, children: value })} /></Field>
             <Field label="Rooms" className="col-span-2 sm:col-span-1"><Stepper value={form.roomsCount} min={1} onChange={(value) => updateStayForm({ ...form, roomsCount: value })} /></Field>
@@ -731,7 +823,7 @@ function RoomCard({ room, searched, selected, loading, offers, selectedOfferId, 
   const offerNightSaving = offer ? Math.max(0, roundMoney(Number(displayPrice || 0) - bestNightPrice)) : 0
   const offerVisual = offer ? getOfferVisual(offer) : null
   return (
-    <StaggerItem as="article" className={`group grid overflow-hidden rounded-lg border bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:shadow-card md:grid-cols-[240px_minmax(0,1fr)_225px] lg:grid-cols-[280px_minmax(0,1fr)_235px] ${selected ? 'border-amberline ring-2 ring-amberline/25' : 'border-white/80'}`}>
+    <StaggerItem as="article" className={`group grid overflow-visible rounded-lg border bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:shadow-card md:grid-cols-[240px_minmax(0,1fr)_225px] lg:grid-cols-[280px_minmax(0,1fr)_235px] ${selected ? 'border-amberline ring-2 ring-amberline/25' : 'border-white/80'}`}>
       <div className="image-lift h-52 rounded-none md:h-full md:min-h-[15.5rem]">
         <RotatingRoomImage room={room} className="h-full w-full object-cover" />
       </div>
@@ -809,7 +901,7 @@ function RoomCardOfferPicker({ offers, selectedOfferId, onSelectOffer }) {
             <button
               key={item.id}
               type="button"
-              className={`w-40 shrink-0 snap-start rounded-md border px-3 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-soft sm:w-auto ${selected ? 'border-white/80 text-white ring-1 ring-white/40' : 'border-stone-200 bg-bone/60 text-charcoal'}`}
+              className={`group/offer relative w-40 shrink-0 snap-start rounded-md border px-3 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-soft focus:outline-none focus:ring-2 focus:ring-amberline/20 sm:w-auto ${selected ? 'border-white/80 text-white ring-1 ring-white/40' : 'border-stone-200 bg-bone/60 text-charcoal hover:border-amberline/35 hover:bg-white'}`}
               style={selected ? { backgroundImage: visual.compact } : undefined}
               onClick={() => onSelectOffer(item.id)}
             >
@@ -818,6 +910,11 @@ function RoomCardOfferPicker({ offers, selectedOfferId, onSelectOffer }) {
                 <span className={`shrink-0 rounded px-2 py-0.5 text-[0.64rem] font-black uppercase ${selected ? 'bg-white/90 text-charcoal' : 'bg-bone text-stone-600'}`}>{selected ? 'Applied' : 'Apply'}</span>
               </span>
               <span className={`mt-1 block text-xs font-black ${selected ? 'text-white/85' : 'text-emerald-800'}`}>{formatOfferValue(item)}</span>
+              <span className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] left-0 z-20 hidden w-64 rounded-md border border-white/70 bg-charcoal p-3 text-white opacity-0 shadow-card transition duration-200 group-hover/offer:block group-hover/offer:opacity-100 group-focus/offer:block group-focus/offer:opacity-100">
+                <span className="block text-xs font-black uppercase text-amber-100">{item.badge || 'Offer details'}</span>
+                <span className="mt-1 block text-sm font-extrabold">{item.title}</span>
+                <span className="mt-1 block text-xs font-semibold leading-5 text-white/76">{formatOfferValue(item)}. {item.description}</span>
+              </span>
             </button>
           )
         })}
@@ -830,6 +927,7 @@ function RoomCardOfferPicker({ offers, selectedOfferId, onSelectOffer }) {
 function RotatingRoomImage({ room, className }) {
   const images = useMemo(() => getRoomImages(room), [room])
   const [index, setIndex] = useState(0)
+  const [openImageIndex, setOpenImageIndex] = useState(null)
   const [pausedUntil, setPausedUntil] = useState(0)
   const paused = pausedUntil > Date.now()
 
@@ -845,8 +943,15 @@ function RotatingRoomImage({ room, className }) {
     return () => window.clearInterval(timer)
   }, [images.length, paused])
 
+  function openFullImage(event) {
+    event.stopPropagation()
+    setPausedUntil(Date.now() + 60_000)
+    setOpenImageIndex(index)
+  }
+
   return (
-    <button className="relative block h-full w-full overflow-hidden bg-stone-200 text-left" type="button" aria-label="Pause room image rotation" onClick={() => setPausedUntil(Date.now() + 5000)}>
+    <div className="relative h-full w-full overflow-hidden bg-stone-200">
+      <button className="relative block h-full w-full text-left" type="button" aria-label="Pause room image rotation" onClick={() => setPausedUntil(Date.now() + 5000)}>
       {images.map((image, imageIndex) => (
         <img
           key={image.url}
@@ -856,7 +961,32 @@ function RotatingRoomImage({ room, className }) {
           className={`absolute inset-0 transition-opacity duration-700 ease-out ${className} ${imageIndex === index ? 'opacity-100' : 'opacity-0'}`}
         />
       ))}
-    </button>
+      </button>
+      <button
+        type="button"
+        className="absolute bottom-3 right-3 inline-flex min-h-10 items-center gap-2 rounded-md border border-white/40 bg-black/45 px-3 text-xs font-black text-white shadow-soft backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-black/62"
+        onClick={openFullImage}
+      >
+        <Maximize2 size={15} /> View full image
+      </button>
+      {images.length > 1 ? (
+        <div className="absolute bottom-3 left-3 flex gap-1.5">
+          {images.map((image, imageIndex) => (
+            <span key={`${image.url}-dot`} className={`h-1.5 w-5 rounded-full ${imageIndex === index ? 'bg-white' : 'bg-white/45'}`} />
+          ))}
+        </div>
+      ) : null}
+      {openImageIndex !== null ? (
+        <ImageLightbox
+          images={images}
+          index={openImageIndex}
+          title={room.name}
+          fallbackImage={fallbackRoomImage}
+          onIndex={setOpenImageIndex}
+          onClose={() => setOpenImageIndex(null)}
+        />
+      ) : null}
+    </div>
   )
 }
 
@@ -880,6 +1010,8 @@ function BookingReviewPage({
   redeemPoints,
   maxRedeemablePoints,
   availableLoyaltyPoints,
+  loyaltyRedemptionMinPoints,
+  loyaltyRedeemEligible,
   tax,
   total,
   paymentMode,
@@ -1007,16 +1139,20 @@ function BookingReviewPage({
               ) : offers.length ? (
                 <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">Select an offer card to apply a discount before payment.</p>
               ) : null}
-              <LoyaltyRedeemControl
-                availablePoints={availableLoyaltyPoints}
-                maxRedeemablePoints={maxRedeemablePoints}
-                redeemPoints={redeemPoints}
-                discount={loyaltyDiscount}
-                subtotalBeforeRedemption={subtotalBeforeRedemption}
-                onChange={onRedeemPoints}
-                onUnavailableAction={onGuide}
-                disabled={!isAuthenticated}
-              />
+              {isAuthenticated && loyaltyRedeemEligible ? (
+                <LoyaltyRedeemControl
+                  availablePoints={availableLoyaltyPoints}
+                  maxRedeemablePoints={maxRedeemablePoints}
+                  redeemPoints={redeemPoints}
+                  discount={loyaltyDiscount}
+                  subtotalBeforeRedemption={subtotalBeforeRedemption}
+                  redemptionMinPoints={loyaltyRedemptionMinPoints}
+                  eligible={loyaltyRedeemEligible}
+                  onChange={onRedeemPoints}
+                  onUnavailableAction={onGuide}
+                  disabled={false}
+                />
+              ) : null}
               <div className="mt-4 flex items-end justify-between">
                 <span className="text-sm font-bold text-stone-500">Booking total</span>
                 <span className="text-2xl font-black">Rs {total.toLocaleString('en-IN')}</span>
@@ -1032,9 +1168,9 @@ function BookingReviewPage({
                 />
                 <PaymentOption
                   active={paymentMode === 'partial'}
-                  title="Pay 25% advance"
-                  amount={roundMoney(total * 0.25)}
-                  note={`Pay the balance Rs ${roundMoney(total * 0.75).toLocaleString('en-IN')} at the hotel.`}
+                  title={`Pay ${PARTIAL_PAYMENT_PERCENT}% advance`}
+                  amount={roundMoney(total * (PARTIAL_PAYMENT_PERCENT / 100))}
+                  note={`Pay the balance Rs ${roundMoney(total * ((100 - PARTIAL_PAYMENT_PERCENT) / 100)).toLocaleString('en-IN')} at the hotel.`}
                   onClick={() => onPaymentMode('partial')}
                 />
               </div>
@@ -1096,16 +1232,18 @@ function PaymentOption({ active, title, amount, note, onClick }) {
   )
 }
 
-function LoyaltyRedeemControl({ availablePoints, maxRedeemablePoints, redeemPoints, discount, subtotalBeforeRedemption, onChange, onUnavailableAction, disabled }) {
-  const cannotRedeem = disabled || maxRedeemablePoints < 1
+function LoyaltyRedeemControl({ availablePoints, maxRedeemablePoints, redeemPoints, discount, subtotalBeforeRedemption, redemptionMinPoints, eligible, onChange, onUnavailableAction, disabled }) {
+  const progress = redemptionMinPoints > 0 ? Math.min(100, Math.round((Number(availablePoints || 0) / redemptionMinPoints) * 100)) : 100
+  const pointsRemaining = Math.max(0, Number(redemptionMinPoints || 0) - Number(availablePoints || 0))
+  const cannotRedeem = disabled || !eligible || maxRedeemablePoints < 1
 
   function showUnavailableGuide() {
     if (disabled) {
       onUnavailableAction?.('Login required', 'Sign in or create your group account to use loyalty points.')
       return
     }
-    if (Number(availablePoints || 0) < 1) {
-      onUnavailableAction?.('You have 0 points now', 'Earn group loyalty points after a confirmed booking, then redeem them at any hotel.')
+    if (!eligible) {
+      onUnavailableAction?.('Keep collecting points', `You can redeem after reaching ${Number(redemptionMinPoints || 0).toLocaleString('en-IN')} group points.`)
       return
     }
     onUnavailableAction?.('No points available for this booking', `Points can be used when the subtotal is at least Rs 101 before tax.`)
@@ -1116,10 +1254,16 @@ function LoyaltyRedeemControl({ availablePoints, maxRedeemablePoints, redeemPoin
       <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
         <div>
           <p className="flex items-center gap-2 text-sm font-extrabold text-charcoal"><Gift size={17} className="text-amberline" /> Redeem group loyalty points</p>
-          <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">You have {Number(availablePoints || 0).toLocaleString('en-IN')} group point{availablePoints === 1 ? '' : 's'}. 1 point = Rs 100 and can be used at any hotel.</p>
+          <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">You have {Number(availablePoints || 0).toLocaleString('en-IN')} group point{availablePoints === 1 ? '' : 's'}. Redemption opens at {Number(redemptionMinPoints || 0).toLocaleString('en-IN')} points. 1 point = Rs 100.</p>
         </div>
         {discount ? <span className="rounded-md bg-white px-3 py-2 text-sm font-black text-emerald-800">- Rs {discount.toLocaleString('en-IN')}</span> : null}
       </div>
+      <div className="mt-4 overflow-hidden rounded-full bg-white shadow-inner">
+        <div className="h-2.5 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)] transition-all duration-500" style={{ width: `${progress}%` }} />
+      </div>
+      <p className="mt-2 text-xs font-bold text-stone-600">
+        {eligible ? 'Eligible to redeem on checkout.' : `${pointsRemaining.toLocaleString('en-IN')} more point${pointsRemaining === 1 ? '' : 's'} needed before redemption.`}
+      </p>
       <div className="mt-4 grid gap-3">
         <div className="relative">
           <input
@@ -1149,7 +1293,7 @@ function LoyaltyRedeemControl({ availablePoints, maxRedeemablePoints, redeemPoin
             {cannotRedeem ? <button type="button" className="absolute inset-0 cursor-not-allowed rounded-md" aria-label="Why loyalty points cannot be redeemed" onClick={showUnavailableGuide} /> : null}
           </div>
           <p className="text-xs font-semibold leading-5 text-stone-600">
-            {disabled ? 'Login to redeem points.' : maxRedeemablePoints ? `Up to ${maxRedeemablePoints.toLocaleString('en-IN')} points can be used on this booking before tax.` : `No points can be used on Rs ${subtotalBeforeRedemption.toLocaleString('en-IN')} subtotal.`}
+            {disabled ? 'Login to redeem points.' : !eligible ? 'Redemption control unlocks after the required point balance.' : maxRedeemablePoints ? `Up to ${maxRedeemablePoints.toLocaleString('en-IN')} points can be used on this booking before tax.` : `No points can be used on Rs ${subtotalBeforeRedemption.toLocaleString('en-IN')} subtotal.`}
           </p>
         </div>
       </div>
@@ -1334,64 +1478,6 @@ function Stepper({ value, min, onChange }) {
       <span className="font-extrabold">{value}</span>
       <button className="grid h-8 w-8 place-items-center rounded-md bg-charcoal text-white transition hover:bg-amberline" type="button" aria-label="Increase" onClick={() => onChange(Number(value) + 1)}><Plus size={15} /></button>
     </div>
-  )
-}
-
-function DatePicker({ label, value, min, onChange, className = '' }) {
-  const [open, setOpen] = useState(false)
-  const current = parseDateValue(value) || new Date()
-  const [viewDate, setViewDate] = useState(new Date(current.getFullYear(), current.getMonth(), 1))
-  const days = useMemo(() => calendarDays(viewDate), [viewDate])
-  const minDate = min ? parseDateValue(min) : null
-
-  function selectDay(day) {
-    if (!day || (minDate && startOfDay(day) < startOfDay(minDate))) return
-    onChange(toDateValue(day))
-    setOpen(false)
-  }
-
-  return (
-    <label className={`relative min-w-0 ${className}`}>
-      <span className="label">{label}</span>
-      <button type="button" className="date-button" onClick={() => setOpen((next) => !next)}>
-        <CalendarDays size={18} className="text-amberline" />
-        <span>{formatDateLabel(value)}</span>
-      </button>
-      {open ? (
-        <motion.div
-          className="fixed left-4 right-4 top-24 z-[80] rounded-lg border border-mist bg-white p-3 text-charcoal shadow-panel sm:absolute sm:left-0 sm:right-auto sm:top-[4.5rem] sm:w-[min(19rem,calc(100vw-2rem))]"
-          initial={{ opacity: 0, y: 8, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.2 }}
-        >
-          <div className="mb-3 flex items-center justify-between">
-            <button type="button" className="calendar-nav" onClick={() => setViewDate(addMonths(viewDate, -1))} aria-label="Previous month"><ChevronLeft size={17} /></button>
-            <p className="text-sm font-extrabold text-charcoal">{viewDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</p>
-            <button type="button" className="calendar-nav" onClick={() => setViewDate(addMonths(viewDate, 1))} aria-label="Next month"><ChevronRight size={17} /></button>
-          </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-[0.68rem] font-black uppercase text-stone-400">
-            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}
-          </div>
-          <div className="mt-2 grid grid-cols-7 gap-1">
-            {days.map((day, index) => {
-              const disabled = !day || (minDate && startOfDay(day) < startOfDay(minDate))
-              const selected = day && toDateValue(day) === value
-              return (
-                <button
-                  key={day ? toDateValue(day) : `empty-${index}`}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => selectDay(day)}
-                  className={`calendar-day ${selected ? 'calendar-day-active' : ''}`}
-                >
-                  {day?.getDate() || ''}
-                </button>
-              )
-            })}
-          </div>
-        </motion.div>
-      ) : null}
-    </label>
   )
 }
 
@@ -1590,39 +1676,4 @@ function getYouTubeVideoId(value) {
     return ''
   }
   return ''
-}
-
-function formatDateLabel(value) {
-  const date = parseDateValue(value)
-  if (!date) return 'Select date'
-  return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-}
-
-function calendarDays(date) {
-  const first = new Date(date.getFullYear(), date.getMonth(), 1)
-  const total = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
-  const days = Array.from({ length: first.getDay() }, () => null)
-  for (let day = 1; day <= total; day += 1) days.push(new Date(date.getFullYear(), date.getMonth(), day))
-  return days
-}
-
-function addMonths(date, months) {
-  return new Date(date.getFullYear(), date.getMonth() + months, 1)
-}
-
-function parseDateValue(value) {
-  if (!value) return null
-  const date = new Date(`${value}T00:00:00`)
-  return Number.isNaN(date.getTime()) ? null : date
-}
-
-function startOfDay(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
-}
-
-function toDateValue(date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
 }

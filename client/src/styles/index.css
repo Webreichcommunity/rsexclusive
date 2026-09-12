@@ -97,6 +97,69 @@ textarea {
     @apply bg-amberline text-white shadow-sm hover:bg-amberline;
   }
 
+  .booking-calendar-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 79;
+    border: 0;
+    background: rgba(17, 17, 17, 0.18);
+  }
+
+  .booking-calendar-panel {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100svh;
+    max-height: none;
+    overflow-y: auto;
+    border-radius: 0;
+    box-shadow: 0 26px 80px rgba(17, 17, 17, 0.28), 0 8px 22px rgba(127, 29, 29, 0.12);
+  }
+
+  .booking-calendar-day {
+    @apply relative mx-auto my-1 flex h-11 w-[2.35rem] flex-col items-center justify-center rounded-md text-[0.8rem] sm:h-12 sm:w-12 sm:text-sm;
+  }
+
+  .booking-calendar-day:not(:disabled):not(.booking-calendar-day-active):hover {
+    @apply bg-amber-50 text-amberline ring-1 ring-amberline/20;
+  }
+
+  .booking-calendar-day-today::after {
+    content: 'Today';
+    @apply absolute top-0.5 left-1/2 -translate-x-1/2 text-[0.48rem] font-black uppercase text-amberline;
+  }
+
+  .booking-calendar-day-active {
+    @apply bg-amberline text-white ring-2 ring-amberline/25;
+  }
+
+  .booking-calendar-day-start {
+    @apply bg-amberline text-white;
+  }
+
+  .booking-calendar-day-end {
+    @apply bg-wine text-white ring-wine/25;
+  }
+
+  .booking-calendar-day-range {
+    @apply bg-amber-50 text-charcoal;
+  }
+
+  @media (min-width: 640px) {
+    .booking-calendar-panel {
+      left: 50%;
+      right: auto;
+      top: 50%;
+      bottom: auto;
+      translate: -50% -50%;
+      width: min(46rem, calc(100vw - 2rem));
+      height: auto;
+      max-height: min(46rem, calc(100svh - 2rem));
+      overflow-y: auto;
+      border-radius: 0.5rem;
+    }
+  }
+
   .label {
     @apply mb-2 block text-[0.72rem] font-bold uppercase tracking-[0.12em] text-stone-500;
   }

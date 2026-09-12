@@ -85,6 +85,10 @@ const bookingCreateSchema = z.object({
   totalAmount: z.coerce.number().nonnegative().optional(),
 })
 
+const hotelSettingsSchema = z.object({
+  loyaltyRedemptionMinPoints: z.coerce.number().int().min(0).max(1000000).default(1000),
+})
+
 const amenitySchema = z.object({
   name: z.string().min(2),
   description: z.string().max(300).optional(),
@@ -177,6 +181,7 @@ adminRoutes.get('/dashboard', async (req, res) => {
       address: req.hotel.address,
       branding: req.hotel.branding,
       hero_image_url: req.hotel.hero_image_url,
+      policies: req.hotel.policies || {},
     },
     metrics: {
       ...rows[0],
@@ -186,6 +191,25 @@ adminRoutes.get('/dashboard', async (req, res) => {
       average_rating: feedbackRows[0]?.average_rating || 0,
     },
     arrivals,
+  })
+})
+
+adminRoutes.patch('/hotel-settings', requireRole('hotel_admin', 'super_admin'), validate(hotelSettingsSchema), async (req, res) => {
+  const { rows } = await query(
+    `UPDATE hotels
+     SET policies = jsonb_set(coalesce(policies, '{}'::jsonb), '{loyaltyRedemptionMinPoints}', to_jsonb($1::int), true),
+         updated_at = now()
+     WHERE id = $2
+     RETURNING id, name, policies`,
+    [req.body.loyaltyRedemptionMinPoints, req.hotel.id],
+  )
+  res.json({ hotel: rows[0] })
+  recordActivity({
+    req,
+    action: 'hotel_loyalty_settings_updated',
+    entityType: 'hotel',
+    entityId: req.hotel.id,
+    metadata: { loyaltyRedemptionMinPoints: req.body.loyaltyRedemptionMinPoints },
   })
 })
 

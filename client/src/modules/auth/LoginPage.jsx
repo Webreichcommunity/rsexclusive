@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { CheckCircle2, KeyRound, Loader2, LogIn, Mail, RotateCcw, UserPlus } from 'lucide-react'
+import { CheckCircle2, FileText, KeyRound, Loader2, LogIn, Mail, RotateCcw, ShieldCheck, UserPlus, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FadeIn } from '../../components/ui/Motion.jsx'
 import { GuideToast } from '../../components/ui/GuideToast.jsx'
@@ -16,12 +16,30 @@ import { useAuth } from './authContext.js'
 import { buildTenantPath, navigateToHotelPath, resolveTenantFromLocation, stripTenantFromPath } from '../tenant/resolveTenant.js'
 
 const pendingProfileKey = 'rs-exclusive-pending-registration'
+const bookingAuthDraftKey = 'rs-exclusive-booking-auth-return'
+const TERMS_VERSION = '2026-09-12'
+const termsAndConditions = [
+  'The primary guest must be at least 18 years of age to be able to check into the hotel.',
+  'It is mandatory for guests to present valid photo identification at the time of check-in. According to government regulations, a valid Photo ID has to be carried by every person above the age of 18 staying at the hotel. The identification proofs accepted are Aadhar Card, Driving License, Voter ID Card, and Passport. Without Original copy of valid ID the guest will not be allowed to check-in.',
+  'Should any action by a guest be deemed inappropriate by the hotel, or if any inappropriate behaviour is brought to the attention of the hotel, the hotel reserves the right, after the allegations have been investigated, to take action against the guest.',
+  'Every hotel may have different policies for specific times during the year.',
+  'Guests shall be liable for any damage, except normal wear and tear to Hotel asset. Guest shall keep the Hotel room in a good condition and maintain hygiene and cleanliness.',
+  'Certain policies are booking specific and are informed to the customer while making the booking.',
+  'Guests may be contacted closer to their check-in date to confirm the arrival status or arrival time through calls or messages. In case, we do not receive a response from the guest after multiple attempts, the booking may be put on hold or cancelled. In case of availability, The Hotel will try to reinstate your booking when you contact us back or make a payment through our multitude of payment options.',
+  'As we continue to strive to improve our services, we may reach out to guests to get a feedback of their experience through calls or messages.',
+  'Management does not take any responsibility of the guests valuables. Lockers are available in rooms.',
+  'I agree to abide the terms and conditions during my/our stay in Hotel.',
+  'By accessing this website and/or submitting any personal or digital information, including but not limited to name, contact details, identification documents, payment information, browsing data, and preferences, the Guest expressly consents to the collection, storage, processing, and use of such Guest Data.',
+  'The Hotels reserves the right to use, retain, analyze, and process the Guest Data at its sole discretion, for purposes including but not limited to reservation management, guest services, marketing and promotional communications, service improvement, analytics, and any other business purpose the Hotels may deem fit from time to time, whether now known or hereafter devised.',
+  'The Guest acknowledges and agrees that by providing such data, they authorize the Hotels to use the same in the manner the Hotels considers appropriate, without further notice or consent, except where applicable law requires otherwise.',
+  "By submitting any personal or digital information on this website, the Guest expressly consents to its collection, storage, and processing by rg exclusive, rs exclusive, Ranjeet hotel a member of the ranjeet Group of Hotels, for purposes including reservations, guest services, marketing, and record-keeping. The Guest further agrees that such data may be shared with and used by ranjeet Hotel, as the Group's head entity, and any other hotel presently or hereafter forming part of the Group, without requiring separate consent for each property.",
+]
 
 export function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [params] = useSearchParams()
-  const returnTo = params.get('returnTo')
+  const returnTo = normalizeInternalReturnTo(params.get('returnTo')) || readBookingReturnTo()
   const tenantMode = resolveTenantFromLocation()
   const returnToPath = String(returnTo || '').split('?')[0]
   const bookingReturnTo = stripTenantFromPath(returnToPath, tenantMode).startsWith('/book')
@@ -34,6 +52,8 @@ export function LoginPage() {
   const [showEmailRegister, setShowEmailRegister] = useState(initialMode !== 'register')
   const [form, setForm] = useState({ fullName: '', email: '', phone: '', password: '' })
   const [pendingProfile, setPendingProfile] = useState(null)
+  const [termsAccepted, setTermsAccepted] = useState(false)
+  const [termsOpen, setTermsOpen] = useState(false)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const [guideToast, setGuideToast] = useState(null)
@@ -79,6 +99,7 @@ export function LoginPage() {
 
   async function registerGuestProfile(user, profile) {
     const token = await user.getIdToken(true)
+    const acceptedAt = profile?.termsAcceptedAt || new Date().toISOString()
     await apiFetch('/auth/register', {
       method: 'POST',
       authToken: token,
@@ -86,6 +107,9 @@ export function LoginPage() {
         fullName: profile?.fullName || user.displayName || user.email,
         phone: profile?.phone || undefined,
         photoUrl: profile?.photoUrl || user.photoURL || undefined,
+        termsAccepted: true,
+        termsVersion: profile?.termsVersion || TERMS_VERSION,
+        termsAcceptedAt: acceptedAt,
       },
     })
     window.localStorage.removeItem(pendingProfileKey)
@@ -100,7 +124,12 @@ export function LoginPage() {
     setLoading(true)
     try {
       if (!isAdminLogin && mode === 'register') {
-        const profile = { fullName: form.fullName, email: form.email, phone: form.phone, photoUrl: '' }
+        if (!termsAccepted) {
+          setError('Accept the terms and conditions to create your guest account.')
+          showGuideToast('Terms required', 'Please read and accept the stay and data terms before registering.')
+          return
+        }
+        const profile = { fullName: form.fullName, email: form.email, phone: form.phone, photoUrl: '', termsVersion: TERMS_VERSION, termsAcceptedAt: new Date().toISOString() }
         const credential = await registerWithEmail({ email: form.email, password: form.password, fullName: form.fullName })
         savePendingProfile(profile)
         setMode('verify')
@@ -181,6 +210,11 @@ export function LoginPage() {
   async function google() {
     setError('')
     setInfo('')
+    if (!isAdminLogin && mode === 'register' && !termsAccepted) {
+      setError('Accept the terms and conditions to create your guest account.')
+      showGuideToast('Terms required', 'Please read and accept the stay and data terms before registering.')
+      return
+    }
     setLoading(true)
     try {
       const credential = await loginWithGoogle()
@@ -191,6 +225,8 @@ export function LoginPage() {
           email: credential.user.email,
           phone: form.phone,
           photoUrl: credential.user.photoURL || '',
+          termsVersion: TERMS_VERSION,
+          termsAcceptedAt: new Date().toISOString(),
         })
         return
       }
@@ -267,9 +303,21 @@ export function LoginPage() {
           </p>
 
           {!isAdminLogin && mode !== 'verify' ? (
-            <button type="button" onClick={google} className="btn-secondary mt-6 w-full border-stone-300 bg-white" disabled={loading}>
+            <button type="button" onClick={google} className="mt-6 inline-flex min-h-12 w-full items-center justify-center gap-3 rounded-md border border-amberline/40 bg-[linear-gradient(135deg,#ffffff_0%,#fff7ed_45%,#fef3c7_100%)] px-5 py-3 text-sm font-black text-charcoal shadow-soft transition duration-300 hover:-translate-y-0.5 hover:border-amberline hover:shadow-card focus:outline-none focus:ring-2 focus:ring-amberline/25 disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60" disabled={loading}>
               {loading ? <Loader2 size={18} className="animate-spin" /> : <GoogleMark />} {mode === 'register' ? 'Register with Google' : 'Continue with Google'}
             </button>
+          ) : null}
+
+          {!isAdminLogin && mode === 'register' ? (
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/70 p-3">
+              <label className="flex items-start gap-3 text-sm font-semibold leading-6 text-stone-700">
+                <input className="mt-1 h-4 w-4 accent-[#7f1d1d]" type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} />
+                <span>I agree to the hotel stay terms, guest policies, and data consent terms.</span>
+              </label>
+              <button type="button" className="mt-2 inline-flex items-center gap-2 text-sm font-black text-amberline underline-offset-4 hover:underline" onClick={() => setTermsOpen(true)}>
+                <FileText size={16} /> Read full terms and conditions
+              </button>
+            </div>
           ) : null}
 
           {!isAdminLogin && mode === 'register' && !showEmailRegister ? (
@@ -326,6 +374,7 @@ export function LoginPage() {
           <Link to={buildTenantPath('/', tenantMode)} className="mt-3 block text-center text-sm font-semibold text-stone-600 hover:text-charcoal">Return to hotel</Link>
         </FadeIn>
       </section>
+      {termsOpen ? <TermsModal onClose={() => setTermsOpen(false)} /> : null}
     </main>
   )
 }
@@ -336,4 +385,47 @@ function Field({ label, children }) {
 
 function GoogleMark() {
   return <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-sm font-black text-[#4285f4] shadow-sm">G</span>
+}
+
+function TermsModal({ onClose }) {
+  return (
+    <div className="fixed inset-0 z-[120] grid place-items-end bg-charcoal/60 p-3 backdrop-blur-sm md:place-items-center" onMouseDown={onClose}>
+      <section className="max-h-[92svh] w-full max-w-3xl overflow-hidden rounded-lg border border-white/60 bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-mist bg-white/95 p-4 backdrop-blur-xl">
+          <div className="min-w-0">
+            <p className="eyebrow">Guest terms</p>
+            <h2 className="mt-1 text-2xl font-black text-charcoal">Terms and conditions</h2>
+          </div>
+          <button type="button" className="grid h-10 w-10 place-items-center rounded-md border border-mist bg-white" onClick={onClose} aria-label="Close terms"><X size={18} /></button>
+        </div>
+        <div className="max-h-[72svh] overflow-y-auto p-4 sm:p-6">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <p className="flex items-center gap-2 text-sm font-extrabold text-amber-950"><ShieldCheck size={17} /> Applies to guest registration and stays</p>
+          </div>
+          <ol className="mt-5 grid gap-3 text-sm font-medium leading-7 text-stone-700">
+            {termsAndConditions.map((term, index) => (
+              <li key={`${index}-${term.slice(0, 16)}`} className="rounded-md border border-stone-200 bg-bone/50 p-3">
+                <span className="font-black text-charcoal">{index + 1}. </span>{term}
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function normalizeInternalReturnTo(value) {
+  const target = String(value || '').trim()
+  if (!target || !target.startsWith('/') || target.startsWith('//')) return ''
+  return target
+}
+
+function readBookingReturnTo() {
+  try {
+    const draft = JSON.parse(window.sessionStorage.getItem(bookingAuthDraftKey) || 'null')
+    return normalizeInternalReturnTo(draft?.returnTo)
+  } catch {
+    return ''
+  }
 }

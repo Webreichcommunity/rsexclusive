@@ -9,6 +9,8 @@ import { sendBookingConfirmation } from './emailService.js'
 
 const bookingRef = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 10)
 const LOYALTY_POINT_VALUE = 100
+const PARTIAL_ADVANCE_PERCENT = 50
+const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
 
 async function ensureCustomer(db, hotelId, user) {
   if (!user) return null
@@ -43,23 +45,27 @@ export function calculateOfferDiscount(offer, subtotal) {
   return Math.round((Math.min(rawDiscount, subtotalAmount) + Number.EPSILON) * 100) / 100
 }
 
-export function calculatePaymentPlan(total, paymentMode = 'full', advancePercent = 25) {
+export function calculatePaymentPlan(total, paymentMode = 'full', advancePercent = PARTIAL_ADVANCE_PERCENT) {
   const bookingTotal = Math.round((Math.max(0, Number(total || 0)) + Number.EPSILON) * 100) / 100
   const mode = paymentMode === 'partial' ? 'partial' : 'full'
   const paidAmount = mode === 'partial'
-    ? Math.round(((bookingTotal * Math.max(1, Math.min(Number(advancePercent || 25), 99))) / 100 + Number.EPSILON) * 100) / 100
+    ? Math.round(((bookingTotal * Math.max(1, Math.min(Number(advancePercent || PARTIAL_ADVANCE_PERCENT), 99))) / 100 + Number.EPSILON) * 100) / 100
     : bookingTotal
   return {
     mode,
-    advancePercent: mode === 'partial' ? Math.max(1, Math.min(Number(advancePercent || 25), 99)) : 100,
+    advancePercent: mode === 'partial' ? Math.max(1, Math.min(Number(advancePercent || PARTIAL_ADVANCE_PERCENT), 99)) : 100,
     paidAmount,
     balanceDue: Math.round((bookingTotal - paidAmount + Number.EPSILON) * 100) / 100,
   }
 }
 
-export function calculateLoyaltyRedemption(requestedPoints, availablePoints, eligibleSubtotal, pointValue = LOYALTY_POINT_VALUE) {
+export function calculateLoyaltyRedemption(requestedPoints, availablePoints, eligibleSubtotal, pointValue = LOYALTY_POINT_VALUE, redemptionMinPoints = 0) {
   const requested = Math.max(0, Math.floor(Number(requestedPoints || 0)))
   const available = Math.max(0, Math.floor(Number(availablePoints || 0)))
+  const minimum = Math.max(0, Math.floor(Number(redemptionMinPoints || 0)))
+  if (minimum && available < minimum) {
+    return { points: 0, amount: 0, pointValue }
+  }
   const redeemableByTotal = Math.max(0, Math.floor(Math.max(0, Number(eligibleSubtotal || 0) - 1) / pointValue))
   const points = Math.min(requested, available, redeemableByTotal)
   return {
@@ -67,6 +73,10 @@ export function calculateLoyaltyRedemption(requestedPoints, availablePoints, eli
     amount: Math.round((points * pointValue + Number.EPSILON) * 100) / 100,
     pointValue,
   }
+}
+
+function getLoyaltyRedemptionMinPoints(hotel) {
+  return Math.max(0, Number(hotel?.policies?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
 }
 
 async function findApplicableOffer(db, hotelId, userId, offerId) {
@@ -122,7 +132,7 @@ async function findSelectedAmenities(db, hotelId, selectedAmenityIds = []) {
   }))
 }
 
-async function reserveLoyaltyRedemption(db, _hotelId, userId, bookingId, requestedPoints, eligibleSubtotal) {
+async function reserveLoyaltyRedemption(db, _hotelId, userId, bookingId, requestedPoints, eligibleSubtotal, redemptionMinPoints = 0) {
   if (!requestedPoints || !userId) return { points: 0, amount: 0, pointValue: LOYALTY_POINT_VALUE }
 
   const { rows } = await db.query(
@@ -134,7 +144,7 @@ async function reserveLoyaltyRedemption(db, _hotelId, userId, bookingId, request
     [userId],
   )
   const availablePoints = rows.reduce((sum, account) => sum + Number(account.points_balance || 0), 0)
-  const redemption = calculateLoyaltyRedemption(requestedPoints, availablePoints, eligibleSubtotal)
+  const redemption = calculateLoyaltyRedemption(requestedPoints, availablePoints, eligibleSubtotal, LOYALTY_POINT_VALUE, redemptionMinPoints)
   if (!redemption.points) return redemption
 
   let remaining = redemption.points
@@ -207,6 +217,7 @@ export async function createBookingHold({ hotel, user, payload }) {
     const afterOfferSubtotal = Math.max(0, Math.round((grossSubtotal - discountAmount + Number.EPSILON) * 100) / 100)
     const customerId = await ensureCustomer(db, hotel.id, user)
     const reference = `RS-${bookingRef()}`
+    const redemptionMinPoints = getLoyaltyRedemptionMinPoints(hotel)
     const bookingMetadata = {
       pricing: {
         roomSubtotal: Math.round((roomSubtotal + Number.EPSILON) * 100) / 100,
@@ -281,6 +292,7 @@ export async function createBookingHold({ hotel, user, payload }) {
       initialBooking.id,
       payload.redeemPoints,
       afterOfferSubtotal,
+      redemptionMinPoints,
     )
     const taxableSubtotal = Math.max(0, Math.round((afterOfferSubtotal - loyaltyRedemption.amount + Number.EPSILON) * 100) / 100)
     const amounts = calculateBookingAmounts(taxableSubtotal, hotel.tax_rate)
@@ -303,6 +315,7 @@ export async function createBookingHold({ hotel, user, payload }) {
               pointValue: loyaltyRedemption.pointValue,
               accountId: loyaltyRedemption.accountId,
               accounts: loyaltyRedemption.accounts || [],
+              redemptionMinPoints,
             },
           }
         : {}),
