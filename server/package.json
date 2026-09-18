@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/index.js",
+    "dev": "node src/index.js",
+    "dev:watch": "node --watch src/index.js",
     "start": "node src/index.js",
     "bootstrap:super-admin": "node src/scripts/bootstrapSuperAdmin.js",
     "test": "node --test tests/*.test.js",

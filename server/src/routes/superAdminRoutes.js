@@ -4,10 +4,10 @@ import { env } from '../config/env.js'
 import { authenticate, requireRole } from '../middleware/auth.js'
 import { validate } from '../middleware/validate.js'
 import { query, transaction } from '../db/pool.js'
-import { createOrUpdateFirebaseUser, deleteFirebaseUser, getFirebaseAuth } from '../services/firebaseAdminService.js'
+import { createOrUpdateFirebaseUser, deleteFirebaseUser } from '../services/firebaseAdminService.js'
 import { listActivities, recordActivity } from '../services/activityService.js'
 import { createAsyncRouter } from '../utils/asyncRouter.js'
-import { conflict, forbidden, notFound } from '../utils/errors.js'
+import { conflict, notFound } from '../utils/errors.js'
 
 export const superAdminRoutes = createAsyncRouter()
 const HOTEL_LIMIT = 3
@@ -62,10 +62,6 @@ const hotelAdminSchema = z.object({
 })
 
 const hotelUpdateSchema = hotelSchema.partial().omit({ admin: true })
-
-const hotelDeleteSchema = z.object({
-  reauthToken: z.string().min(20),
-})
 
 const mediaSignatureSchema = z.object({
   folder: z.string().min(2).max(80).default('hotel-assets'),
@@ -384,33 +380,44 @@ superAdminRoutes.patch('/hotels/:hotelId/status', validate(z.object({ status: z.
   res.json({ hotel: rows[0] })
 })
 
-superAdminRoutes.delete('/hotels/:hotelId', validate(hotelDeleteSchema), async (req, res) => {
-  const verified = await getFirebaseAuth().verifyIdToken(req.body.reauthToken, true)
-  if (verified.uid !== req.firebaseUser.uid || verified.email !== req.user.email) {
-    throw forbidden('Re-authenticate with the same super admin Google account before deleting this hotel.')
+superAdminRoutes.delete('/hotels/:hotelId', async (req, res) => {
+  const purge = await transaction(async (db) => {
+    const { rows: hotelRows } = await db.query('SELECT * FROM hotels WHERE id = $1 FOR UPDATE', [req.params.hotelId])
+    if (!hotelRows[0]) throw notFound('Hotel not found')
+
+    const mediaItems = await collectHotelPurgeMedia(db, req.params.hotelId, hotelRows[0])
+    const deletableUsers = await collectHotelScopedUsers(db, req.params.hotelId)
+    const userIds = deletableUsers.map((user) => user.id)
+
+    await db.query('DELETE FROM payments WHERE hotel_id = $1', [req.params.hotelId])
+    await db.query('DELETE FROM invoices WHERE hotel_id = $1', [req.params.hotelId])
+    await db.query('DELETE FROM bookings WHERE hotel_id = $1', [req.params.hotelId])
+    if (userIds.length) {
+      await db.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [userIds])
+    }
+    const { rowCount } = await db.query('DELETE FROM hotels WHERE id = $1', [req.params.hotelId])
+    if (!rowCount) throw notFound('Hotel not found')
+
+    return { hotel: hotelRows[0], mediaItems, users: deletableUsers }
+  })
+
+  for (const item of purge.mediaItems) {
+    await destroyCloudinaryPublicId(item.publicId)
   }
-  const provider = verified.firebase?.sign_in_provider || ''
-  const hasGoogleProvider = provider === 'google.com' || Boolean(verified.firebase?.identities?.['google.com'])
-  if (!hasGoogleProvider) {
-    throw forbidden('Hotel deletion requires Google re-authentication for the super admin account.')
+  for (const user of purge.users) {
+    await deleteFirebaseUser(user.firebase_uid)
   }
 
-  const { rows: hotelRows } = await query('SELECT * FROM hotels WHERE id = $1', [req.params.hotelId])
-  if (!hotelRows[0]) throw notFound('Hotel not found')
-  const { rows: bookingRows } = await query('SELECT count(*)::int AS count FROM bookings WHERE hotel_id = $1', [req.params.hotelId])
-  if (bookingRows[0]?.count > 0) {
-    throw conflict('Hotel has bookings. Deactivate it instead of deleting historical records.', 'hotel_has_bookings')
-  }
-  await destroyHotelMedia(hotelRows[0])
-  const { rowCount } = await query('DELETE FROM hotels WHERE id = $1', [req.params.hotelId])
-  if (!rowCount) throw notFound('Hotel not found')
   recordActivity({
     req,
     action: 'hotel_deleted',
     entityType: 'hotel',
     entityId: req.params.hotelId,
-    hotel: hotelRows[0],
-    metadata: { name: hotelRows[0].name },
+    hotel: purge.hotel,
+    metadata: {
+      name: purge.hotel.name,
+      deletedUsers: purge.users.length,
+    },
   })
   res.status(204).send()
 })
@@ -530,6 +537,72 @@ superAdminRoutes.get('/payments', async (_req, res) => {
   res.json({ payments: rows })
 })
 
+async function collectHotelPurgeMedia(db, hotelId, hotel) {
+  const { rows: roomRows } = await db.query('SELECT hero_image_url, gallery FROM room_types WHERE hotel_id = $1', [hotelId])
+  const { rows: offerRows } = await db.query('SELECT image_url FROM offers WHERE hotel_id = $1', [hotelId])
+  const { rows: assetRows } = await db.query('SELECT cloudinary_public_id, secure_url, alt_text FROM media_assets WHERE hotel_id = $1', [hotelId])
+  const items = [
+    ...collectMediaItems(hotel),
+    ...roomRows.flatMap((room) => collectRoomMedia(room)),
+    ...offerRows.flatMap((offer) => collectOfferMedia(offer)),
+    ...assetRows.map((asset) => ({
+      url: asset.secure_url,
+      publicId: asset.cloudinary_public_id,
+      alt: asset.alt_text || '',
+      source: 'mediaAsset',
+    })),
+  ]
+  const seen = new Set()
+  return items.filter((item) => {
+    if (!item.publicId || seen.has(item.publicId)) return false
+    seen.add(item.publicId)
+    return true
+  })
+}
+
+async function collectHotelScopedUsers(db, hotelId) {
+  const { rows } = await db.query(
+    `WITH hotel_related_users AS (
+       SELECT user_id FROM hotel_admins WHERE hotel_id = $1
+       UNION
+       SELECT user_id FROM customers WHERE hotel_id = $1
+       UNION
+       SELECT user_id FROM bookings WHERE hotel_id = $1 AND user_id IS NOT NULL
+       UNION
+       SELECT user_id FROM hotel_feedback WHERE hotel_id = $1 AND user_id IS NOT NULL
+       UNION
+       SELECT user_id FROM loyalty_accounts WHERE hotel_id = $1
+     )
+     SELECT u.id, u.firebase_uid
+     FROM users u
+     WHERE u.role <> 'super_admin'
+       AND u.firebase_uid IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM hotel_related_users hru WHERE hru.user_id = u.id
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM hotel_admins ha WHERE ha.user_id = u.id AND ha.hotel_id <> $1
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM customers c WHERE c.user_id = u.id AND c.hotel_id <> $1
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM bookings b WHERE b.user_id = u.id AND b.hotel_id <> $1
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM hotel_feedback hf WHERE hf.user_id = u.id AND hf.hotel_id <> $1
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM loyalty_accounts la
+         WHERE la.user_id = u.id
+           AND (la.hotel_id IS NULL OR la.hotel_id <> $1)
+       )`,
+    [hotelId],
+  )
+  return rows
+}
+
 async function recordHotelMedia(db, hotel, body = {}) {
   const items = collectMediaItems({
     heroImageUrl: body.heroImageUrl,
@@ -557,14 +630,6 @@ async function syncRemovedHotelMedia(previousHotel, nextHotel) {
     await destroyCloudinaryPublicId(item.publicId)
     await query('DELETE FROM media_assets WHERE hotel_id = $1 AND cloudinary_public_id = $2', [previousHotel.id, item.publicId])
   }
-}
-
-async function destroyHotelMedia(hotel) {
-  const items = collectMediaItems(hotel).filter((item) => item.publicId)
-  for (const item of items) {
-    await destroyCloudinaryPublicId(item.publicId)
-  }
-  await query('DELETE FROM media_assets WHERE hotel_id = $1', [hotel.id])
 }
 
 async function destroyCloudinaryPublicId(publicId) {

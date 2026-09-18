@@ -26,7 +26,7 @@ import { StatusPill } from '../../components/ui/StatusPill.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { uploadImageToCloudinary } from '../../services/cloudinaryUpload.js'
-import { loginWithGoogle, logout } from '../auth/firebaseClient.js'
+import { logout } from '../auth/firebaseClient.js'
 import { buildHotelUrl, formatHotelHost } from '../tenant/resolveTenant.js'
 
 const HOTEL_LIMIT = 3
@@ -231,16 +231,14 @@ export function SuperAdminPage() {
   }
 
   async function deleteHotel(hotel) {
-    if (!window.confirm(`Delete ${hotel.name}? You will be asked to confirm with Google. Hotels with bookings should be suspended instead.`)) return
+    if (!window.confirm(`Delete ${hotel.name}? This permanently removes the hotel, bookings, guests, admins assigned only to this hotel, rooms, payments, feedback, offers, amenities, and media records. This cannot be undone.`)) return
     setSaving(true)
     try {
-      const credential = await loginWithGoogle()
-      const reauthToken = await credential.user.getIdToken(true)
-      await apiFetch(`/super-admin/hotels/${hotel.id}`, { method: 'DELETE', body: { reauthToken } })
+      await apiFetch(`/super-admin/hotels/${hotel.id}`, { method: 'DELETE' })
       setMode('list')
       setSelectedHotelId('')
       setRefreshKey((value) => value + 1)
-      setNotice({ type: 'success', message: 'Hotel deleted.' })
+      setNotice({ type: 'success', message: `${hotel.name} and its hotel data were deleted.` })
     } catch (error) {
       setNotice({ type: 'error', message: error.message })
     } finally {
