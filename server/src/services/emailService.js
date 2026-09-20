@@ -22,25 +22,21 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
   const paidNow = paymentPlan.paidAmount ?? booking.total_amount ?? 0
   const balanceDue = paymentPlan.balanceDue ?? 0
   const roomName = room?.name || booking.room_type_name || 'Selected room'
-  const html = `
-    <div style="font-family:Inter,Arial,sans-serif;color:#23211f;max-width:640px;margin:0 auto">
-      <div style="background:#171412;color:#fff;padding:24px;border-radius:14px 14px 0 0">
-        <h1 style="font-size:24px;margin:0">${hotel.name}</h1>
-        <p style="margin:8px 0 0;color:#d8d1c8">Your stay is confirmed. The billing PDF is attached.</p>
-      </div>
-      <div style="border:1px solid #e7dfd4;border-top:0;padding:24px;border-radius:0 0 14px 14px">
+  const bookingTime = formatDateTime(booking.confirmed_at || booking.created_at || invoice.issued_at || new Date())
+  const checkIn = formatDate(booking.check_in)
+  const checkOut = formatDate(booking.check_out)
+  const detailsHtml = `
         <p><strong>Booking:</strong> ${booking.booking_reference}</p>
+        <p><strong>Booking time:</strong> ${bookingTime}</p>
         <p><strong>Room:</strong> ${roomName}</p>
-        <p><strong>Guest:</strong> ${booking.guest_name}</p>
-        <p><strong>Check-in:</strong> ${booking.check_in}<br/><strong>Check-out:</strong> ${booking.check_out}<br/><strong>Nights:</strong> ${booking.nights}</p>
+        <p><strong>Guest:</strong> ${booking.guest_name}<br/><strong>Email:</strong> ${booking.guest_email}<br/><strong>Phone:</strong> ${booking.guest_phone || '-'}</p>
+        <p><strong>Check-in:</strong> ${checkIn}<br/><strong>Check-out:</strong> ${checkOut}<br/><strong>Nights:</strong> ${booking.nights}</p>
+        <p><strong>Occupancy:</strong> ${booking.adults} adult${Number(booking.adults) === 1 ? '' : 's'}, ${booking.children || 0} child${Number(booking.children) === 1 ? '' : 'ren'} / ${booking.rooms_count} room${Number(booking.rooms_count) === 1 ? '' : 's'}</p>
         <p><strong>Total:</strong> ${booking.currency} ${Number(booking.total_amount || 0).toLocaleString('en-IN')}</p>
         <p><strong>Paid now:</strong> ${booking.currency} ${Number(paidNow).toLocaleString('en-IN')}<br/><strong>Balance due:</strong> ${booking.currency} ${Number(balanceDue).toLocaleString('en-IN')}</p>
         ${booking.metadata?.offer?.title ? `<p><strong>Offer applied:</strong> ${booking.metadata.offer.title}</p>` : ''}
         ${booking.metadata?.selectedAmenities?.length ? `<p><strong>Amenities:</strong> ${booking.metadata.selectedAmenities.map((amenity) => amenity.name).join(', ')}</p>` : ''}
         ${loyalty?.points ? `<p><strong>Group loyalty redeemed:</strong> ${loyalty.points} points (${booking.currency} ${Number(loyalty.amount || 0).toLocaleString('en-IN')})</p>` : ''}
-        <p style="color:#706b64;font-size:13px">Please keep the attached invoice PDF for check-in and billing reference.</p>
-      </div>
-    </div>
   `
   const attachments = [
     {
@@ -53,11 +49,25 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
       kind: 'guest',
       to: booking.guest_email,
       subject: `${hotel.name} booking confirmed: ${booking.booking_reference}`,
+      html: bookingEmailHtml({
+        hotelName: hotel.name,
+        title: 'Your stay is confirmed',
+        intro: `Your booking was confirmed at ${bookingTime}. The billing PDF is attached for your records.`,
+        detailsHtml,
+        footer: 'Please keep the attached invoice PDF for check-in and billing reference.',
+      }),
     },
     ...hotelEmailRecipients(hotel, booking.guest_email, hotelAdminEmails).map((email) => ({
       kind: 'hotel',
       to: email,
-      subject: `${hotel.name} new booking: ${booking.booking_reference}`,
+      subject: `${hotel.name} new booking alert: ${booking.booking_reference}`,
+      html: bookingEmailHtml({
+        hotelName: hotel.name,
+        title: 'New booking alert',
+        intro: `A guest booking was confirmed at ${bookingTime}. The same invoice PDF sent to the guest is attached.`,
+        detailsHtml,
+        footer: 'Please review the guest details, arrival dates, payment status, and attached invoice PDF.',
+      }),
     })),
   ]
 
@@ -68,7 +78,7 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
         from: env.email.from,
         to: recipient.to,
         subject: recipient.subject,
-        html,
+        html: recipient.html,
         attachments,
       })
       results.push({ ...result, to: recipient.to, kind: recipient.kind })
@@ -106,6 +116,22 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
   }
 }
 
+function bookingEmailHtml({ hotelName, title, intro, detailsHtml, footer }) {
+  return `
+    <div style="font-family:Inter,Arial,sans-serif;color:#23211f;max-width:640px;margin:0 auto">
+      <div style="background:#171412;color:#fff;padding:24px;border-radius:14px 14px 0 0">
+        <h1 style="font-size:24px;margin:0">${hotelName}</h1>
+        <p style="margin:8px 0 0;color:#f8d98c;font-weight:700">${title}</p>
+        <p style="margin:8px 0 0;color:#d8d1c8">${intro}</p>
+      </div>
+      <div style="border:1px solid #e7dfd4;border-top:0;padding:24px;border-radius:0 0 14px 14px">
+        ${detailsHtml}
+        <p style="color:#706b64;font-size:13px">${footer}</p>
+      </div>
+    </div>
+  `
+}
+
 function hotelEmailRecipients(hotel, guestEmail, hotelAdminEmails = []) {
   const contact = hotel?.contact || {}
   const candidates = [
@@ -124,6 +150,24 @@ function hotelEmailRecipients(hotel, guestEmail, hotelAdminEmails = []) {
       .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       .filter((email) => email.toLowerCase() !== guest),
   )]
+}
+
+function formatDate(value) {
+  if (!value) return 'TBA'
+  return new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }).format(new Date(value))
+}
+
+function formatDateTime(value) {
+  if (!value) return 'Not recorded'
+  return new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Asia/Kolkata',
+    timeZoneName: 'short',
+  }).format(new Date(value))
 }
 
 function senderHint(from) {
