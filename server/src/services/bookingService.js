@@ -509,14 +509,15 @@ export async function confirmBookingPayment({ orderId, paymentId, signature, tru
     return { booking: { ...confirmed, room_type_name: roomRows[0]?.name }, hotel: hotelRows[0], room: roomRows[0], invoice: invoiceRows[0] }
   })
 
-  generateBookingPdf({ hotel: result.hotel, room: result.room, booking: result.booking, invoice: result.invoice })
-    .then(async (pdf) => {
-      const invoice = { ...result.invoice, pdf_url: pdf.publicUrl }
-      await query('UPDATE invoices SET pdf_url = $1 WHERE id = $2', [pdf.publicUrl, result.invoice.id])
-      const hotelAdminEmails = await listHotelAdminEmails(result.hotel.id)
-      await sendBookingConfirmation({ hotel: result.hotel, room: result.room, booking: result.booking, invoice, pdfPath: pdf.filePath, hotelAdminEmails })
-    })
-    .catch((error) => console.error({ message: 'Receipt workflow failed', bookingId: result.booking.id, error: error.message }))
+  try {
+    const pdf = await generateBookingPdf({ hotel: result.hotel, room: result.room, booking: result.booking, invoice: result.invoice })
+    const invoice = { ...result.invoice, pdf_url: pdf.publicUrl }
+    await query('UPDATE invoices SET pdf_url = $1 WHERE id = $2', [pdf.publicUrl, result.invoice.id])
+    const hotelAdminEmails = await listHotelAdminEmails(result.hotel.id)
+    await sendBookingConfirmation({ hotel: result.hotel, room: result.room, booking: result.booking, invoice, pdfPath: pdf.filePath, hotelAdminEmails })
+  } catch (error) {
+    console.error({ message: 'Receipt workflow failed', bookingId: result.booking.id, error: error.message })
+  }
 
   return result.booking
 }

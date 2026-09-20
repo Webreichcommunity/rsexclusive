@@ -71,9 +71,9 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
     })),
   ]
 
-  try {
-    const results = []
-    for (const recipient of recipients) {
+  const results = await Promise.all(
+    recipients.map(async (recipient) => {
+      try {
       const result = await client.emails.send({
         from: env.email.from,
         to: recipient.to,
@@ -81,7 +81,6 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
         html: recipient.html,
         attachments,
       })
-      results.push({ ...result, to: recipient.to, kind: recipient.kind })
       if (result.error) {
         console.error({
           message: 'Resend booking email failed',
@@ -101,19 +100,22 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
           kind: recipient.kind,
         })
       }
-    }
-    return { data: results }
-  } catch (error) {
-    console.error({
-      message: 'Resend booking email threw an exception',
-      bookingReference: booking.booking_reference,
-      to: recipients.map((recipient) => recipient.to),
-      from: env.email.from,
-      error: error.message,
-      hint: senderHint(env.email.from),
-    })
-    throw error
-  }
+        return { ...result, to: recipient.to, kind: recipient.kind }
+      } catch (error) {
+        console.error({
+          message: 'Resend booking email threw an exception',
+          bookingReference: booking.booking_reference,
+          to: recipient.to,
+          kind: recipient.kind,
+          from: env.email.from,
+          error: error.message,
+          hint: senderHint(env.email.from),
+        })
+        return { error: { message: error.message }, to: recipient.to, kind: recipient.kind }
+      }
+    }),
+  )
+  return { data: results }
 }
 
 function bookingEmailHtml({ hotelName, title, intro, detailsHtml, footer }) {
