@@ -26,7 +26,7 @@ async function ensureCustomer(db, hotelId, user) {
   return rows[0].id
 }
 
-export function calculateBookingAmounts(subtotal, taxRate) {
+export function calculateBookingAmounts(subtotal) {
   const subtotalAmount = Math.round((Number(subtotal || 0) + Number.EPSILON) * 100) / 100
   const tax = Math.round(((subtotalAmount * FIXED_TAX_RATE) / 100 + Number.EPSILON) * 100) / 100
   return {

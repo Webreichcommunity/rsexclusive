@@ -136,15 +136,13 @@ function bookingEmailHtml({ hotelName, title, intro, detailsHtml, footer }) {
 
 function hotelEmailRecipients(hotel, guestEmail, hotelAdminEmails = []) {
   const contact = hotel?.contact || {}
-  const candidates = [
-    ...hotelAdminEmails,
-    contact.email,
-    contact.managerEmail,
-    contact.adminEmail,
-    ...(Array.isArray(contact.emails) ? contact.emails : []),
-    hotel?.email,
-    hotel?.admin_email,
-  ]
+  const assignedAdmins = normalizeEmails(hotelAdminEmails, guestEmail)
+  if (assignedAdmins.length) return assignedAdmins
+  const candidates = [contact.email, contact.managerEmail, contact.adminEmail, ...(Array.isArray(contact.emails) ? contact.emails : []), hotel?.email, hotel?.admin_email]
+  return normalizeEmails(candidates, guestEmail)
+}
+
+function normalizeEmails(candidates, guestEmail) {
   const guest = String(guestEmail || '').trim().toLowerCase()
   return [...new Set(
     candidates

@@ -84,34 +84,25 @@ export async function generateBookingPdf({ hotel, room, booking, invoice }) {
     doc.pipe(stream)
 
     drawReceiptHeader(doc, { hotel, invoice, booking, hotelLogo, address })
-    let y = 145
+    let y = 150
 
-    y = drawKeyValueTable(doc, y, 'Booking Information', [
-      ['Booking reference', booking.booking_reference],
-      ['Invoice number', invoice.invoice_number],
-      ['Invoice date', formatDate(invoice.issued_at || new Date())],
-      ['Status', booking.status],
-      ['Guest name', booking.guest_name],
-      ['Guest email', booking.guest_email],
-      ['Guest phone', booking.guest_phone || '-'],
-      ['Hotel', hotel?.name || booking.hotel_name || '-'],
-    ])
+    y = drawBookingSummary(doc, y, { hotel, invoice, booking })
 
-    y = drawKeyValueTable(doc, y + 14, 'Stay Details', [
+    y = drawInfoGrid(doc, y + 14, 'Stay Details', [
       ['Room', room?.name || booking.room_type_name],
       ['Check-in', formatDate(booking.check_in)],
       ['Check-out', formatDate(booking.check_out)],
       ['Nights', `${booking.nights} night${Number(booking.nights) === 1 ? '' : 's'}`],
-      ['Rooms booked', `${booking.rooms_count} room${Number(booking.rooms_count) === 1 ? '' : 's'}`],
+      ['Rooms', `${booking.rooms_count} room${Number(booking.rooms_count) === 1 ? '' : 's'}`],
       ['Guests', `${booking.adults} adult${Number(booking.adults) === 1 ? '' : 's'}, ${booking.children || 0} child${Number(booking.children) === 1 ? '' : 'ren'}`],
-    ])
+    ], 3)
 
-    y = drawKeyValueTable(doc, y + 14, 'Room Details', [
+    y = drawInfoGrid(doc, y + 14, 'Room Details', [
       ['Room type', room?.name || booking.room_type_name],
       ['Bed type', room?.bed_type || 'Premium bedding'],
       ['Room size', room?.size_sqft ? `${room.size_sqft} sq ft` : '-'],
       ['Description', room?.description || 'Room details as selected during booking.'],
-    ])
+    ], 2)
 
     if (selectedAmenities.length) {
       y = drawAmenitiesTable(doc, y + 14, selectedAmenities, booking, currency)
@@ -139,15 +130,19 @@ export async function generateBookingPdf({ hotel, room, booking, invoice }) {
 }
 
 function drawReceiptHeader(doc, { hotel, invoice, booking, hotelLogo, address }) {
-  doc.rect(0, 0, doc.page.width, 124).fill('#171412')
+  doc.rect(0, 0, doc.page.width, 132).fill('#151210')
+  doc.rect(0, 126, doc.page.width, 6).fill('#c99b45')
   drawHotelLogo(doc, 42, 26, hotelLogo, hotel?.name)
-  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(20).text(hotel?.name || 'Hotel', 124, 25, { width: 338, height: 48 })
-  doc.fillColor('#d7cec4').font('Helvetica').fontSize(8.5).text(address || 'Akola, Maharashtra, India', 124, 72, { width: 338, height: 26 })
-  doc.fillColor('#f4d28a').font('Helvetica-Bold').fontSize(9).text('Booking Confirmation & Tax Invoice', 124, 102, { width: 240 })
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(21).text(hotel?.name || 'Hotel', 126, 27, { width: 300, height: 48 })
+  doc.fillColor('#d8d0c6').font('Helvetica').fontSize(8.2).text(address || 'Akola, Maharashtra, India', 126, 75, { width: 300, height: 30, lineGap: 1 })
+  doc.fillColor('#f2c76d').font('Helvetica-Bold').fontSize(9).text('Booking Confirmation & Tax Invoice', 126, 108, { width: 260 })
 
-  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(10).text(invoice.invoice_number, 430, 34, { width: 122, align: 'right' })
-  doc.fillColor('#c8bfb6').font('Helvetica').fontSize(8).text(formatDate(invoice.issued_at || new Date()), 430, 51, { width: 122, align: 'right' })
-  doc.fillColor('#f4d28a').font('Helvetica-Bold').fontSize(8).text(booking.booking_reference, 430, 83, { width: 122, align: 'right' })
+  doc.fillColor('#b8afa5').font('Helvetica-Bold').fontSize(7.2).text('INVOICE NUMBER', 425, 30, { width: 128, align: 'right' })
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(10).text(invoice.invoice_number, 390, 43, { width: 163, align: 'right', height: 14, ellipsis: true })
+  doc.fillColor('#b8afa5').font('Helvetica-Bold').fontSize(7.2).text('BOOKING REFERENCE', 425, 66, { width: 128, align: 'right' })
+  doc.fillColor('#f2c76d').font('Helvetica-Bold').fontSize(9.2).text(booking.booking_reference, 425, 79, { width: 128, align: 'right' })
+  doc.fillColor('#b8afa5').font('Helvetica-Bold').fontSize(7.2).text('ISSUED ON', 425, 101, { width: 128, align: 'right' })
+  doc.fillColor('#ffffff').font('Helvetica').fontSize(8.5).text(formatDate(invoice.issued_at || new Date()), 425, 114, { width: 128, align: 'right' })
 }
 
 function drawHotelLogo(doc, x, y, logo, name) {
@@ -163,25 +158,66 @@ function drawHotelLogo(doc, x, y, logo, name) {
   doc.fillColor('#9f6b12').font('Helvetica-Bold').fontSize(18).text(initials(name), x, y + 21, { width: 62, align: 'center' })
 }
 
-function drawKeyValueTable(doc, y, title, rows) {
-  y = sectionTitle(doc, y, title)
-  const labelWidth = 142
-  const valueWidth = PAGE.contentWidth - labelWidth
-  const heights = rows.map(([, value]) => {
-    doc.font('Helvetica').fontSize(8.8)
-    return Math.max(24, doc.heightOfString(String(value || '-'), { width: valueWidth - 20 }) + 13)
+function drawBookingSummary(doc, y, { hotel, invoice, booking }) {
+  const columns = [
+    [
+      ['Booking reference', booking.booking_reference],
+      ['Status', booking.status],
+    ],
+    [
+      ['Guest', booking.guest_name],
+      ['Contact', `${booking.guest_phone || '-'} / ${booking.guest_email || '-'}`],
+    ],
+    [
+      ['Hotel', hotel?.name || booking.hotel_name || '-'],
+      ['Invoice', `${invoice.invoice_number} / ${formatDate(invoice.issued_at || new Date())}`],
+    ],
+  ]
+  const height = 78
+  y = ensurePage(doc, y, height)
+  doc.roundedRect(42, y, PAGE.contentWidth, height, 8).fillAndStroke('#fff8ed', '#e4d7c5')
+  const colWidth = PAGE.contentWidth / 3
+  columns.forEach((items, index) => {
+    const x = 42 + index * colWidth
+    if (index > 0) doc.moveTo(x, y + 12).lineTo(x, y + height - 12).strokeColor('#e6dac9').lineWidth(0.7).stroke()
+    let cursor = y + 15
+    items.forEach(([label, value]) => {
+      doc.fillColor('#7d7267').font('Helvetica-Bold').fontSize(7.2).text(String(label).toUpperCase(), x + 15, cursor, { width: colWidth - 30 })
+      doc.fillColor('#211f1c').font('Helvetica').fontSize(8.2).text(String(value || '-'), x + 15, cursor + 12, { width: colWidth - 30, height: 22, lineGap: 1, ellipsis: true })
+      cursor += 32
+    })
   })
-  const tableHeight = heights.reduce((sum, height) => sum + height, 0)
+  return y + height
+}
+
+function drawInfoGrid(doc, y, title, items, columns = 3) {
+  y = sectionTitle(doc, y, title)
+  const colWidth = PAGE.contentWidth / columns
+  const rows = []
+  for (let index = 0; index < items.length; index += columns) rows.push(items.slice(index, index + columns))
+  const rowHeights = rows.map((row) => {
+    const heights = row.map(([, value]) => {
+      doc.font('Helvetica').fontSize(8.8)
+      return doc.heightOfString(String(value || '-'), { width: colWidth - 24, lineGap: 1 }) + 24
+    })
+    return Math.max(42, ...heights)
+  })
+  const tableHeight = rowHeights.reduce((sum, height) => sum + height, 0)
   y = ensurePage(doc, y, tableHeight + 4)
-  doc.rect(42, y, PAGE.contentWidth, tableHeight).strokeColor('#ded6ca').lineWidth(0.7).stroke()
+  doc.rect(42, y, PAGE.contentWidth, tableHeight).strokeColor('#d8ccbb').lineWidth(0.7).stroke()
   let cursor = y
-  rows.forEach(([label, value], index) => {
-    const height = heights[index]
-    if (index > 0) doc.moveTo(42, cursor).lineTo(553, cursor).strokeColor('#ded6ca').stroke()
-    doc.rect(42, cursor, labelWidth, height).fill('#fbf7ef')
-    doc.moveTo(42 + labelWidth, cursor).lineTo(42 + labelWidth, cursor + height).strokeColor('#ded6ca').stroke()
-    doc.fillColor('#756b61').font('Helvetica-Bold').fontSize(8).text(String(label).toUpperCase(), 54, cursor + 8, { width: labelWidth - 22 })
-    doc.fillColor('#24211f').font('Helvetica').fontSize(8.8).text(String(value || '-'), 54 + labelWidth, cursor + 7, { width: valueWidth - 20, lineGap: 1 })
+  rows.forEach((row, rowIndex) => {
+    const height = rowHeights[rowIndex]
+    if (rowIndex > 0) doc.moveTo(42, cursor).lineTo(553, cursor).strokeColor('#e5dbce').lineWidth(0.6).stroke()
+    for (let col = 1; col < columns; col += 1) {
+      const x = 42 + col * colWidth
+      doc.moveTo(x, cursor).lineTo(x, cursor + height).strokeColor('#e5dbce').lineWidth(0.6).stroke()
+    }
+    row.forEach(([label, value], colIndex) => {
+      const x = 42 + colIndex * colWidth
+      doc.fillColor('#7b7066').font('Helvetica-Bold').fontSize(7.2).text(String(label).toUpperCase(), x + 12, cursor + 9, { width: colWidth - 24 })
+      doc.fillColor('#231f1d').font('Helvetica').fontSize(8.8).text(String(value || '-'), x + 12, cursor + 22, { width: colWidth - 24, lineGap: 1 })
+    })
     cursor += height
   })
   return y + tableHeight
@@ -194,21 +230,21 @@ function drawAmenitiesTable(doc, y, amenities, booking, currency) {
     const unit = Number(amenity.price || 0)
     return [amenity.name || 'Amenity', qty, money(currency, unit), money(currency, unit * qty)]
   })
-  const rowHeight = 25
+  const rowHeight = 24
   const tableHeight = rowHeight * (rows.length + 1)
   y = ensurePage(doc, y, tableHeight + 4)
   const cols = [42, 304, 364, 454, 553]
-  doc.rect(42, y, PAGE.contentWidth, tableHeight).strokeColor('#d6cbbd').lineWidth(0.7).stroke()
-  doc.rect(42, y, PAGE.contentWidth, rowHeight).fill('#f4efe7')
-  for (const x of cols.slice(1, -1)) doc.moveTo(x, y).lineTo(x, y + tableHeight).strokeColor('#d6cbbd').stroke()
-  doc.moveTo(42, y + rowHeight).lineTo(553, y + rowHeight).strokeColor('#d6cbbd').stroke()
+  doc.rect(42, y, PAGE.contentWidth, tableHeight).strokeColor('#cfc2b1').lineWidth(0.75).stroke()
+  doc.rect(42, y, PAGE.contentWidth, rowHeight).fill('#f1eadf')
+  for (const x of cols.slice(1, -1)) doc.moveTo(x, y).lineTo(x, y + tableHeight).strokeColor('#cfc2b1').lineWidth(0.65).stroke()
+  doc.moveTo(42, y + rowHeight).lineTo(553, y + rowHeight).strokeColor('#cfc2b1').lineWidth(0.65).stroke()
   tableText(doc, 'Amenity', cols[0] + 10, y + 8, cols[1] - cols[0] - 20, true)
   tableText(doc, 'Qty', cols[1] + 10, y + 8, cols[2] - cols[1] - 20, true)
   tableText(doc, 'Unit price', cols[2] + 10, y + 8, cols[3] - cols[2] - 20, true, 'right')
   tableText(doc, 'Amount', cols[3] + 10, y + 8, cols[4] - cols[3] - 20, true, 'right')
   rows.forEach((row, index) => {
     const rowY = y + rowHeight * (index + 1)
-    if (index > 0) doc.moveTo(42, rowY).lineTo(553, rowY).strokeColor('#d6cbbd').stroke()
+    if (index > 0) doc.moveTo(42, rowY).lineTo(553, rowY).strokeColor('#e4dbcf').lineWidth(0.55).stroke()
     tableText(doc, row[0], cols[0] + 10, rowY + 8, cols[1] - cols[0] - 20)
     tableText(doc, row[1], cols[1] + 10, rowY + 8, cols[2] - cols[1] - 20)
     tableText(doc, row[2], cols[2] + 10, rowY + 8, cols[3] - cols[2] - 20, false, 'right')
@@ -218,7 +254,6 @@ function drawAmenitiesTable(doc, y, amenities, booking, currency) {
 }
 
 function drawBillingTable(doc, y, { booking, currency, pricing, selectedAmenities, metadata, paymentPlan }) {
-  y = sectionTitle(doc, y, 'Billing Summary')
   const halfTax = Number(booking.tax_amount || 0) / 2
   const rows = [
     ['Room subtotal', money(currency, pricing.roomSubtotal || booking.subtotal_amount)],
@@ -231,32 +266,33 @@ function drawBillingTable(doc, y, { booking, currency, pricing, selectedAmenitie
     ['Paid now', money(currency, paymentPlan.paidAmount ?? booking.total_amount)],
     ['Balance due at hotel', money(currency, paymentPlan.balanceDue || 0)],
   ]
-  const rowHeight = 22
+  const rowHeight = 21
   const totalHeight = rowHeight * rows.length + 34
+  y = ensurePage(doc, y, totalHeight + 36)
+  y = sectionTitle(doc, y, 'Billing Summary')
   y = ensurePage(doc, y, totalHeight + 4)
-  doc.rect(42, y, PAGE.contentWidth, totalHeight).strokeColor('#ded6ca').lineWidth(0.7).stroke()
+  doc.rect(42, y, PAGE.contentWidth, totalHeight).strokeColor('#d8ccbb').lineWidth(0.75).stroke()
   let cursor = y
   rows.forEach(([label, value], index) => {
-    if (index > 0) doc.moveTo(42, cursor).lineTo(553, cursor).strokeColor('#e6ded2').stroke()
+    if (index > 0) doc.moveTo(42, cursor).lineTo(553, cursor).strokeColor('#e6ded2').lineWidth(0.55).stroke()
     tableText(doc, label, 54, cursor + 7, 330)
     tableText(doc, value, 390, cursor + 7, 150, false, 'right')
     cursor += rowHeight
   })
-  doc.rect(42, cursor, PAGE.contentWidth, 34).fillAndStroke('#f4efe7', '#ded6ca')
-  doc.fillColor('#171412').font('Helvetica-Bold').fontSize(12).text('Booking Total', 54, cursor + 10, { width: 240 })
-  doc.fillColor('#171412').font('Helvetica-Bold').fontSize(12).text(money(currency, booking.total_amount), 356, cursor + 10, { width: 184, align: 'right' })
+  doc.rect(42, cursor, PAGE.contentWidth, 34).fillAndStroke('#171412', '#171412')
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(12).text('Booking Total', 54, cursor + 10, { width: 240 })
+  doc.fillColor('#f2c76d').font('Helvetica-Bold').fontSize(12).text(money(currency, booking.total_amount), 356, cursor + 10, { width: 184, align: 'right' })
   return y + totalHeight
 }
 
 function drawContactDetails(doc, y, { hotel, address }) {
-  y = sectionTitle(doc, y, 'Hotel Contact Details')
   const phones = [...new Set([...(hotel?.contact?.phones || []), hotel?.contact?.phone, hotel?.contact?.whatsapp].filter(Boolean))]
-  return drawKeyValueTable(doc, y, '', [
+  return drawInfoGrid(doc, y, 'Hotel Contact Details', [
     ['Hotel', hotel?.name || '-'],
-    ['Phone', phones.join(', ') || '-'],
+    ['Contact numbers', phones.join(', ') || '-'],
     ['Email', hotel?.contact?.email || '-'],
     ['Address', address || '-'],
-  ])
+  ], 2)
 }
 
 function drawTermsPages(doc, { hotel, booking, webreichLogo, startY }) {

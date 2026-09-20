@@ -71,8 +71,18 @@ export const env = {
     webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET,
     routeAccounts: {
       ...parseRouteAccountMap(process.env.RAZORPAY_ROUTE_ACCOUNTS),
-      ...(process.env.RAZORPAY_RS_LINKED_ACCOUNT_ID ? { 'rs-exclusive-stay-and-fine-dine': process.env.RAZORPAY_RS_LINKED_ACCOUNT_ID } : {}),
-      ...(process.env.RAZORPAY_RG_LINKED_ACCOUNT_ID ? { 'rg-exclusive-stay-and-fine-dine': process.env.RAZORPAY_RG_LINKED_ACCOUNT_ID } : {}),
+      ...(process.env.RAZORPAY_RS_LINKED_ACCOUNT_ID
+        ? {
+            rsexclusive: process.env.RAZORPAY_RS_LINKED_ACCOUNT_ID,
+            'rs-exclusive-stay-and-fine-dine': process.env.RAZORPAY_RS_LINKED_ACCOUNT_ID,
+          }
+        : {}),
+      ...(process.env.RAZORPAY_RG_LINKED_ACCOUNT_ID
+        ? {
+            rgexclusive: process.env.RAZORPAY_RG_LINKED_ACCOUNT_ID,
+            'rg-exclusive-stay-and-fine-dine': process.env.RAZORPAY_RG_LINKED_ACCOUNT_ID,
+          }
+        : {}),
     },
   },
   cloudinary: {
