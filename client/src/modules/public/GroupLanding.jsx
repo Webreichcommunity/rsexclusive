@@ -1,9 +1,12 @@
 import {
   ArrowUpRight,
+  BedDouble,
   Building2,
+  ChevronDown,
   Facebook,
   Gift,
   Globe2,
+  Images,
   Instagram,
   Linkedin,
   Mail,
@@ -23,6 +26,7 @@ import { useAsync } from '../../hooks/useAsync.js'
 import { useAuth } from '../auth/authContext.js'
 import { useAppUser } from '../auth/useAppUser.js'
 import { apiFetch } from '../../services/apiClient.js'
+import { logoDisplayUrl } from '../../utils/logoUrl.js'
 import { buildHotelUrl } from '../tenant/resolveTenant.js'
 
 const fallbackHotelImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1800&q=80'
@@ -100,6 +104,7 @@ export function GroupLanding() {
               <a href="#properties" className="btn-dark w-full sm:w-auto">Choose a property <ArrowUpRight size={18} /></a>
               {activeHotel ? <a href={buildHotelUrl(activeHotel)} className="btn-primary w-full sm:w-auto">Open {cleanHotelName(activeHotel.name)}</a> : null}
             </div>
+            <CollectionLogoStrip hotels={hotels} />
           </FadeIn>
         </div>
 
@@ -148,10 +153,8 @@ export function GroupLanding() {
               <Stagger className="mt-8 grid gap-5">
                 {hotels.map((hotel, index) => (
                   <StaggerItem key={hotel.id}>
-                    <article className="group grid min-h-[560px] overflow-hidden rounded-lg border border-stone-200 bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:border-amberline/30 hover:shadow-card sm:min-h-0 md:grid-cols-[280px_minmax(0,1fr)_220px]">
-                      <div className="image-lift h-56 rounded-none md:h-full md:min-h-[15rem]">
-                        <img src={hotel.hero_image_url || fallbackHotelImage} alt={hotel.name} className="h-full w-full object-cover" loading={index ? 'lazy' : 'eager'} />
-                      </div>
+                    <article className="group grid overflow-hidden rounded-lg border border-stone-200 bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:border-amberline/30 hover:shadow-card md:grid-cols-[300px_minmax(0,1fr)_245px]">
+                      <PropertyMediaMosaic hotel={hotel} eager={!index} />
                       <div className="flex min-w-0 flex-col justify-between p-5 sm:p-6">
                         <div>
                           <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-stone-500">
@@ -160,15 +163,23 @@ export function GroupLanding() {
                           <h3 className="mt-4 text-2xl font-bold leading-tight text-charcoal md:text-3xl">{cleanHotelName(hotel.name)}</h3>
                           <p className="mt-3 line-clamp-4 max-w-2xl text-sm leading-7 text-stone-600">{hotelSummary(hotel)}</p>
                         </div>
-                        <div className="mt-5 flex flex-wrap gap-2 border-t border-stone-200 pt-4">
-                          <span className="rounded-md bg-bone px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-amberline">Open for booking</span>
-                          <span className="rounded-md bg-emerald-50 px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-emerald-800">Direct rates</span>
+                        <div className="mt-5 border-t border-stone-200 pt-4">
+                          <div className="flex flex-wrap gap-2">
+                            <span className="rounded-md bg-bone px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-amberline">Open for booking</span>
+                            <span className="rounded-md bg-emerald-50 px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-emerald-800">Direct rates</span>
+                            <span className="rounded-md bg-stone-100 px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-stone-700">{hotelRoomImages(hotel).length} room photos</span>
+                          </div>
+                          <HotelContactDetails hotel={hotel} />
                         </div>
                       </div>
                       <div className="flex min-h-[180px] flex-col justify-between border-t border-amberline/20 bg-[linear-gradient(180deg,#fff7ed_0%,#ffffff_100%)] p-5 md:min-h-0 md:border-l md:border-t-0">
                         <div>
                           <p className="text-xs font-black uppercase tracking-[0.14em] text-amberline">Hotel site</p>
                           <p className="mt-2 text-sm font-semibold leading-6 text-stone-600">Rooms, offers, amenities, contact details, and direct booking live on the property page.</p>
+                          <div className="mt-4 rounded-md border border-amber-200 bg-white p-3">
+                            <p className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.12em] text-stone-500"><BedDouble size={15} /> Best for</p>
+                            <p className="mt-1 text-sm font-extrabold leading-5 text-charcoal">{propertyMood(hotel, index)}</p>
+                          </div>
                         </div>
                         <a href={buildHotelUrl(hotel)} className="btn-primary mt-5 w-full">
                           Enter hotel <ArrowUpRight size={17} />
@@ -196,14 +207,27 @@ export function GroupLanding() {
           <div className="page-heading">
             <div>
               <p className="eyebrow">Experience</p>
-              <h2 className="page-title">A polished preview of the collection</h2>
-              <p className="page-subtitle">From business-ready rooms to warm dining and arrival moments, every property presents a focused reason to stay.</p>
+              <h2 className="page-title">Two real glimpses from every hotel</h2>
+              <p className="page-subtitle">Each property preview uses the hotel and room photographs already attached to that hotel, so guests see the actual stay before entering the hotel site.</p>
             </div>
           </div>
-          <Stagger className="grid auto-rows-[220px] gap-3 sm:auto-rows-[250px] md:grid-cols-4 md:grid-rows-[230px_230px]">
-            {galleryImages(hotels).map((item, index) => (
-              <StaggerItem key={`${item.url}-${index}`} className={`image-lift ${index === 0 ? 'md:col-span-2 md:row-span-2' : ''}`}>
-                <img src={item.url} alt={item.alt} loading={index ? 'lazy' : 'eager'} className="h-full w-full object-cover" />
+          <Stagger className="grid gap-5 lg:grid-cols-3">
+            {experienceHotelCards(hotels).map((item, index) => (
+              <StaggerItem key={item.hotel.id || item.hotel.name}>
+                <article className="overflow-hidden rounded-lg border border-stone-200 bg-white shadow-soft">
+                  <div className="grid h-[320px] grid-cols-[1.25fr_0.85fr] gap-2 p-2 sm:h-[360px] lg:h-[410px]">
+                    {item.images.map((image, imageIndex) => (
+                      <div key={`${image.url}-${imageIndex}`} className={`image-lift rounded-md ${imageIndex === 0 ? 'row-span-2' : ''}`}>
+                        <img src={image.url} alt={image.alt} loading={index || imageIndex ? 'lazy' : 'eager'} className="h-full w-full object-cover" />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border-t border-stone-200 p-5">
+                    <p className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.14em] text-amberline"><Images size={15} /> Hotel photographs</p>
+                    <h3 className="mt-2 text-xl font-extrabold text-charcoal">{cleanHotelName(item.hotel.name)}</h3>
+                    <p className="mt-2 text-sm font-semibold leading-6 text-stone-600">{propertyMood(item.hotel, index)}</p>
+                  </div>
+                </article>
               </StaggerItem>
             ))}
           </Stagger>
@@ -258,18 +282,125 @@ function hotelSummary(hotel) {
   return raw
 }
 
-function galleryImages(hotels) {
-  const images = hotels.flatMap((hotel) => [
-    { url: hotel.hero_image_url, alt: hotel.name },
-    { url: hotel.branding?.showcaseImageUrl, alt: `${hotel.name} showcase` },
-  ]).filter((image) => image.url)
+function PropertyMediaMosaic({ hotel, eager = false }) {
+  const images = hotelRoomImages(hotel)
+  const visible = fillImages(images, [
+    { url: hotel.hero_image_url || fallbackHotelImage, alt: hotel.name },
+    { url: hotel.branding?.showcaseImageUrl || groupFallbackHero, alt: `${hotel.name} stay preview` },
+  ]).slice(0, 3)
 
-  return (images.length ? images : [
-    { url: groupFallbackHero, alt: 'Hotel lobby' },
-    { url: fallbackHotelImage, alt: 'Hotel exterior' },
-    { url: 'https://images.unsplash.com/photo-1514890547357-a9ee288728e0?auto=format&fit=crop&w=1400&q=80', alt: 'Hotel lounge' },
-    { url: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=crop&w=1400&q=80', alt: 'Hotel dining' },
-  ]).slice(0, 6)
+  return (
+    <div className="grid h-72 gap-2 bg-stone-100 p-2 md:h-full md:min-h-[17rem]">
+      <div className="image-lift rounded-md">
+        <img src={visible[0].url} alt={visible[0].alt} loading={eager ? 'eager' : 'lazy'} className="h-full w-full object-cover" />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {visible.slice(1, 3).map((image, index) => (
+          <div key={`${image.url}-${index}`} className="image-lift rounded-md">
+            <img src={image.url} alt={image.alt} loading="lazy" className="h-full w-full object-cover" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function HotelContactDetails({ hotel }) {
+  const phones = hotelPhones(hotel)
+  const address = hotelAddress(hotel)
+
+  return (
+    <details className="group mt-4 rounded-lg border border-stone-200 bg-bone/70 open:bg-white">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-extrabold text-charcoal marker:hidden">
+        <span>Address and contact</span>
+        <ChevronDown size={17} className="transition group-open:rotate-180" />
+      </summary>
+      <div className="grid gap-3 border-t border-stone-200 px-4 py-4 text-sm font-semibold leading-6 text-stone-600">
+        <p className="flex items-start gap-2"><MapPin size={16} className="mt-1 shrink-0 text-amberline" /> {address}</p>
+        {phones.length ? <p className="flex items-start gap-2"><Phone size={16} className="mt-1 shrink-0 text-amberline" /> {phones.join(', ')}</p> : null}
+        {hotel.contact?.email ? <p className="flex items-start gap-2 break-all"><Mail size={16} className="mt-1 shrink-0 text-amberline" /> {hotel.contact.email}</p> : null}
+      </div>
+    </details>
+  )
+}
+
+function hotelRoomImages(hotel) {
+  return uniqueImages(normalizeMediaList(hotel.room_preview_images), hotel.name)
+}
+
+function experienceHotelCards(hotels) {
+  if (!hotels.length) {
+    return [{
+      hotel: { id: 'fallback', name: 'Ranjeet Groups of Hotels Akola' },
+      images: [
+        { url: groupFallbackHero, alt: 'Hotel lobby' },
+        { url: fallbackHotelImage, alt: 'Hotel room' },
+      ],
+    }]
+  }
+
+  return hotels.slice(0, 3).map((hotel) => ({
+    hotel,
+    images: fillImages(hotelPhotographs(hotel), hotelRoomImages(hotel)).slice(0, 2),
+  }))
+}
+
+function hotelPhotographs(hotel) {
+  return uniqueImages([
+    { url: hotel.hero_image_url, alt: hotel.name },
+    ...normalizeMediaList(hotel.branding?.heroImages),
+    ...normalizeMediaList(hotel.branding?.showcaseImages),
+    { url: hotel.branding?.showcaseImageUrl, alt: `${hotel.name} showcase` },
+    { url: hotel.branding?.diningImage || hotel.branding?.diningImageUrl, alt: `${hotel.name} dining` },
+    ...normalizeMediaList(hotel.branding?.gallery),
+  ], hotel.name)
+}
+
+function normalizeMediaList(items) {
+  if (!Array.isArray(items)) return []
+  return items.map((item) => {
+    if (typeof item === 'string') return { url: item, alt: 'Hotel image' }
+    return { url: item?.url || item?.secureUrl, alt: item?.alt || item?.title || 'Hotel image' }
+  }).filter((item) => item.url)
+}
+
+function uniqueImages(images, fallbackAlt = 'Hotel image') {
+  const seen = new Set()
+  const result = []
+  for (const image of images) {
+    const url = String(image?.url || '').trim()
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    result.push({ url, alt: image.alt || fallbackAlt })
+  }
+  return result
+}
+
+function fillImages(primary, fallback) {
+  const images = uniqueImages([...(primary || []), ...(fallback || [])])
+  if (images.length >= 2) return images
+  return uniqueImages([
+    ...images,
+    { url: groupFallbackHero, alt: 'Hotel exterior' },
+    { url: fallbackHotelImage, alt: 'Hotel room' },
+  ])
+}
+
+function hotelAddress(hotel) {
+  const address = hotel.address || {}
+  return [address.line1, cleanCity(address.city), address.state || 'Maharashtra', address.country || 'India']
+    .filter(Boolean)
+    .join(', ')
+}
+
+function propertyMood(hotel, index) {
+  const moods = [
+    'Business stays, family arrivals, and direct Akola bookings.',
+    'Comfort-focused rooms with clear pricing and warm service.',
+    'Celebrations, work trips, and quick city stays with direct support.',
+  ]
+  const summary = hotelSummary(hotel)
+  return summary.length > 120 ? moods[index % moods.length] : summary
 }
 
 function GroupFeedback({ hotels }) {
@@ -454,6 +585,7 @@ function GroupFooter({ hotels }) {
           <p className="mt-4 max-w-md text-sm leading-7 text-stone-300">
             A curated Akola hotel collection for direct booking, refined guest care, and distinct property experiences.
           </p>
+          <CollectionLogoStrip hotels={hotels} compact dark />
           <div className="mt-6 flex flex-wrap gap-2">
             {primarySocial.map(({ label, href, icon: Icon }) => (
               <a key={label} href={href} target={href.startsWith('#') ? undefined : '_blank'} rel={href.startsWith('#') ? undefined : 'noreferrer'} aria-label={label} className="grid h-10 w-10 place-items-center rounded-md border border-white/12 bg-white/8 text-white transition hover:-translate-y-0.5 hover:border-amber-200/50 hover:bg-white/14">
@@ -506,6 +638,21 @@ function GroupFooter({ hotels }) {
         </div>
       </div>
     </footer>
+  )
+}
+
+function CollectionLogoStrip({ hotels, compact = false, dark = false }) {
+  const logoHotels = hotels.filter((hotel) => hotel.branding?.logoUrl).slice(0, 3)
+  if (!logoHotels.length) return null
+  return (
+    <div className={`${compact ? 'mt-5' : 'mt-7'} flex flex-wrap items-center gap-5`}>
+      {logoHotels.map((hotel) => (
+        <a key={hotel.id} href={buildHotelUrl(hotel)} className="group flex items-center gap-2" title={cleanHotelName(hotel.name)}>
+          <img src={logoDisplayUrl(hotel.branding.logoUrl)} alt={`${cleanHotelName(hotel.name)} logo`} className={`${compact ? 'h-10 w-10' : 'h-14 w-14'} shrink-0 object-contain transition duration-300 group-hover:scale-105`} loading="lazy" />
+          {!compact ? <span className={`max-w-[150px] truncate text-xs font-black uppercase tracking-[0.12em] ${dark ? 'text-stone-300' : 'text-white/78'}`}>{cleanHotelName(hotel.name)}</span> : null}
+        </a>
+      ))}
+    </div>
   )
 }
 

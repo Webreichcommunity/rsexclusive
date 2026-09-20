@@ -9,7 +9,7 @@ function getResend() {
   return resend
 }
 
-export async function sendBookingConfirmation({ hotel, room, booking, invoice, pdfPath }) {
+export async function sendBookingConfirmation({ hotel, room, booking, invoice, pdfPath, hotelAdminEmails = [] }) {
   const client = getResend()
   if (!client) {
     console.info(`Email skipped for ${booking.booking_reference}; RESEND_API_KEY not configured`)
@@ -22,11 +22,7 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
   const paidNow = paymentPlan.paidAmount ?? booking.total_amount ?? 0
   const balanceDue = paymentPlan.balanceDue ?? 0
   const roomName = room?.name || booking.room_type_name || 'Selected room'
-  const emailPayload = {
-    from: env.email.from,
-    to: booking.guest_email,
-    subject: `${hotel.name} booking confirmed: ${booking.booking_reference}`,
-    html: `
+  const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#23211f;max-width:640px;margin:0 auto">
       <div style="background:#171412;color:#fff;padding:24px;border-radius:14px 14px 0 0">
         <h1 style="font-size:24px;margin:0">${hotel.name}</h1>
@@ -45,46 +41,89 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
         <p style="color:#706b64;font-size:13px">Please keep the attached invoice PDF for check-in and billing reference.</p>
       </div>
     </div>
-  `,
-    attachments: [
-      {
-        filename: `${invoice.invoice_number}.pdf`,
-        content: pdf,
-      },
-    ],
-  }
+  `
+  const attachments = [
+    {
+      filename: `${invoice.invoice_number}.pdf`,
+      content: pdf,
+    },
+  ]
+  const recipients = [
+    {
+      kind: 'guest',
+      to: booking.guest_email,
+      subject: `${hotel.name} booking confirmed: ${booking.booking_reference}`,
+    },
+    ...hotelEmailRecipients(hotel, booking.guest_email, hotelAdminEmails).map((email) => ({
+      kind: 'hotel',
+      to: email,
+      subject: `${hotel.name} new booking: ${booking.booking_reference}`,
+    })),
+  ]
 
   try {
-    const result = await client.emails.send(emailPayload)
-    if (result.error) {
-      console.error({
-        message: 'Resend booking email failed',
-        bookingReference: booking.booking_reference,
-        to: booking.guest_email,
+    const results = []
+    for (const recipient of recipients) {
+      const result = await client.emails.send({
         from: env.email.from,
-        error: result.error,
-        hint: senderHint(env.email.from),
+        to: recipient.to,
+        subject: recipient.subject,
+        html,
+        attachments,
       })
-      return result
+      results.push({ ...result, to: recipient.to, kind: recipient.kind })
+      if (result.error) {
+        console.error({
+          message: 'Resend booking email failed',
+          bookingReference: booking.booking_reference,
+          to: recipient.to,
+          kind: recipient.kind,
+          from: env.email.from,
+          error: result.error,
+          hint: senderHint(env.email.from),
+        })
+      } else {
+        console.info({
+          message: 'Booking confirmation email sent',
+          bookingReference: booking.booking_reference,
+          emailId: result.data?.id,
+          to: recipient.to,
+          kind: recipient.kind,
+        })
+      }
     }
-    console.info({
-      message: 'Booking confirmation email sent',
-      bookingReference: booking.booking_reference,
-      emailId: result.data?.id,
-      to: booking.guest_email,
-    })
-    return result
+    return { data: results }
   } catch (error) {
     console.error({
       message: 'Resend booking email threw an exception',
       bookingReference: booking.booking_reference,
-      to: booking.guest_email,
+      to: recipients.map((recipient) => recipient.to),
       from: env.email.from,
       error: error.message,
       hint: senderHint(env.email.from),
     })
     throw error
   }
+}
+
+function hotelEmailRecipients(hotel, guestEmail, hotelAdminEmails = []) {
+  const contact = hotel?.contact || {}
+  const candidates = [
+    ...hotelAdminEmails,
+    contact.email,
+    contact.managerEmail,
+    contact.adminEmail,
+    ...(Array.isArray(contact.emails) ? contact.emails : []),
+    hotel?.email,
+    hotel?.admin_email,
+  ]
+  const guest = String(guestEmail || '').trim().toLowerCase()
+  return [...new Set(
+    candidates
+      .map((email) => String(email || '').trim())
+      .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      .filter((email) => email.toLowerCase() !== guest),
+  )]
 }
 
 function senderHint(from) {

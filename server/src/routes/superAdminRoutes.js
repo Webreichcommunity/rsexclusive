@@ -11,6 +11,7 @@ import { conflict, notFound } from '../utils/errors.js'
 
 export const superAdminRoutes = createAsyncRouter()
 const HOTEL_LIMIT = 3
+const FIXED_TAX_RATE = 5
 
 cloudinary.config({
   cloud_name: env.cloudinary.cloudName,
@@ -28,10 +29,14 @@ const hotelSchema = z.object({
   address: z.record(z.any()).default({}),
   contact: z.record(z.any()).default({}),
   policies: z.record(z.any()).default({}),
+  paymentConfig: z.object({
+    routingType: z.enum(['primary', 'linked']).default('primary'),
+    linkedAccountId: z.string().trim().optional().default(''),
+  }).default({ routingType: 'primary', linkedAccountId: '' }),
   amenities: z.array(z.string()).default([]),
   branding: z.record(z.any()).default({}),
   heroImageUrl: z.string().url().or(z.literal('')).nullable().optional(),
-  taxRate: z.coerce.number().min(0).max(30).default(12),
+  taxRate: z.coerce.number().min(0).max(30).default(5),
   currency: z.string().length(3).default('INR'),
   admin: z
     .object({
@@ -105,7 +110,7 @@ superAdminRoutes.get('/overview', async (_req, res) => {
        GROUP BY ha.hotel_id
      )
      SELECT
-       h.id, h.name, h.slug, h.subdomain, h.custom_domain, h.status, h.address, h.contact, h.branding, h.hero_image_url, h.created_at,
+       h.id, h.name, h.slug, h.subdomain, h.custom_domain, h.status, h.address, h.contact, h.branding, h.hero_image_url, h.payment_config, h.created_at,
        coalesce(bm.bookings, 0)::int AS bookings,
        coalesce(cm.customers, 0)::int AS customers,
        coalesce(bm.revenue, 0)::numeric AS revenue,
@@ -230,9 +235,9 @@ superAdminRoutes.post('/hotels', validate(hotelSchema), async (req, res) => {
     const { rows } = await db.query(
       `INSERT INTO hotels (
         name, slug, legal_name, subdomain, custom_domain, description, address, contact,
-        policies, amenities, branding, hero_image_url, tax_rate, currency
+        policies, payment_config, amenities, branding, hero_image_url, tax_rate, currency
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
       RETURNING *`,
       [
         body.name,
@@ -244,10 +249,11 @@ superAdminRoutes.post('/hotels', validate(hotelSchema), async (req, res) => {
         body.address,
         body.contact,
         body.policies,
+        normalizePaymentConfig(body.paymentConfig),
         body.amenities,
         body.branding,
         body.heroImageUrl || null,
-        body.taxRate,
+        FIXED_TAX_RATE,
         body.currency,
       ],
     )
@@ -310,13 +316,14 @@ superAdminRoutes.patch('/hotels/:hotelId', validate(hotelUpdateSchema), async (r
       address = coalesce($7::jsonb, address),
       contact = coalesce($8::jsonb, contact),
       policies = coalesce($9::jsonb, policies),
-      amenities = coalesce($10::text[], amenities),
-      branding = coalesce($11::jsonb, branding),
-      hero_image_url = CASE WHEN $12::text IS NULL THEN hero_image_url ELSE nullif($12, '') END,
-      tax_rate = coalesce($13::numeric, tax_rate),
-      currency = coalesce($14::char(3), currency),
+      payment_config = coalesce($10::jsonb, payment_config),
+      amenities = coalesce($11::text[], amenities),
+      branding = coalesce($12::jsonb, branding),
+      hero_image_url = CASE WHEN $13::text IS NULL THEN hero_image_url ELSE nullif($13, '') END,
+      tax_rate = $14::numeric,
+      currency = coalesce($15::char(3), currency),
       updated_at = now()
-     WHERE id = $15
+     WHERE id = $16
      RETURNING *`,
     [
       body.name,
@@ -328,10 +335,11 @@ superAdminRoutes.patch('/hotels/:hotelId', validate(hotelUpdateSchema), async (r
       body.address,
       body.contact,
       body.policies,
+      body.paymentConfig ? normalizePaymentConfig(body.paymentConfig) : null,
       body.amenities,
       body.branding,
       body.heroImageUrl,
-      body.taxRate,
+      FIXED_TAX_RATE,
       body.currency,
       req.params.hotelId,
     ],
@@ -619,6 +627,14 @@ async function recordHotelMedia(db, hotel, body = {}) {
       [hotel.id, item.publicId, item.url, item.alt || hotel.name, JSON.stringify({ source: item.source })],
     )
   }
+}
+
+function normalizePaymentConfig(paymentConfig = {}) {
+  const linkedAccountId = String(paymentConfig.linkedAccountId || paymentConfig.linked_account_id || '').trim()
+  if (paymentConfig.routingType === 'linked' && linkedAccountId) {
+    return { routingType: 'linked', linkedAccountId }
+  }
+  return { routingType: 'primary', linkedAccountId: '' }
 }
 
 async function syncRemovedHotelMedia(previousHotel, nextHotel) {

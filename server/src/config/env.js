@@ -17,6 +17,38 @@ for (const key of requiredInProduction) {
   }
 }
 
+function parseRouteAccountMap(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return {}
+  if (raw.startsWith('{')) {
+    try {
+      return Object.fromEntries(
+        Object.entries(JSON.parse(raw))
+          .map(([key, accountId]) => [normalizeRouteKey(key), String(accountId || '').trim()])
+          .filter(([, accountId]) => accountId),
+      )
+    } catch {
+      return {}
+    }
+  }
+  return Object.fromEntries(
+    raw
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const separator = entry.includes('=') ? '=' : ':'
+        const [key, ...rest] = entry.split(separator)
+        return [normalizeRouteKey(key), rest.join(separator).trim()]
+      })
+      .filter(([key, accountId]) => key && accountId),
+  )
+}
+
+function normalizeRouteKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 4000),
@@ -37,6 +69,11 @@ export const env = {
     keyId: process.env.RAZORPAY_KEY_ID,
     keySecret: process.env.RAZORPAY_KEY_SECRET,
     webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET,
+    routeAccounts: {
+      ...parseRouteAccountMap(process.env.RAZORPAY_ROUTE_ACCOUNTS),
+      ...(process.env.RAZORPAY_RS_LINKED_ACCOUNT_ID ? { 'rs-exclusive-stay-and-fine-dine': process.env.RAZORPAY_RS_LINKED_ACCOUNT_ID } : {}),
+      ...(process.env.RAZORPAY_RG_LINKED_ACCOUNT_ID ? { 'rg-exclusive-stay-and-fine-dine': process.env.RAZORPAY_RG_LINKED_ACCOUNT_ID } : {}),
+    },
   },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME,

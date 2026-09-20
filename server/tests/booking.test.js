@@ -2,19 +2,19 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { calculateBookingAmounts, calculateLoyaltyRedemption, calculateOfferDiscount, calculatePaymentPlan } from '../src/services/bookingService.js'
 
-test('calculateBookingAmounts treats tax rate as a percentage', () => {
+test('calculateBookingAmounts always applies the fixed 5 percent tax rate', () => {
   assert.deepEqual(calculateBookingAmounts(18000, 12), {
     subtotal: 18000,
-    tax: 2160,
-    total: 20160,
+    tax: 900,
+    total: 18900,
   })
 })
 
 test('calculateBookingAmounts rounds currency values to two decimals', () => {
   assert.deepEqual(calculateBookingAmounts(999.995, 18), {
     subtotal: 1000,
-    tax: 180,
-    total: 1180,
+    tax: 50,
+    total: 1050,
   })
 })
 
@@ -35,12 +35,12 @@ test('calculatePaymentPlan charges the full booking total by default', () => {
   })
 })
 
-test('calculatePaymentPlan supports a 50 percent partial advance', () => {
+test('calculatePaymentPlan supports a 25 percent partial advance', () => {
   assert.deepEqual(calculatePaymentPlan(20160, 'partial'), {
     mode: 'partial',
-    advancePercent: 50,
-    paidAmount: 10080,
-    balanceDue: 10080,
+    advancePercent: 25,
+    paidAmount: 5040,
+    balanceDue: 15120,
   })
 })
 

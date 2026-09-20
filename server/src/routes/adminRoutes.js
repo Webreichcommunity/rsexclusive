@@ -20,7 +20,7 @@ cloudinary.config({
 
 const roomTypeSchema = z.object({
   name: z.string().min(2),
-  slug: z.string().min(2).regex(/^[a-z0-9-]+$/),
+  slug: z.string().min(2).regex(/^[a-z0-9-]+$/).optional(),
   description: z.string().min(10),
   occupancyAdults: z.coerce.number().int().positive(),
   occupancyChildren: z.coerce.number().int().min(0).default(0),
@@ -32,7 +32,9 @@ const roomTypeSchema = z.object({
   amenityItems: z.array(z.object({
     id: z.string().uuid().optional(),
     name: z.string().min(1),
+    description: z.string().max(300).optional(),
     price: z.coerce.number().nonnegative().default(0),
+    icon: z.string().max(500).optional(),
   })).default([]),
   heroImageUrl: z.string().url().or(z.literal('')).optional(),
   gallery: z.array(z.object({
@@ -43,6 +45,15 @@ const roomTypeSchema = z.object({
   physicalRooms: z.coerce.number().int().positive().default(1),
   inventoryDays: z.coerce.number().int().min(1).max(730).default(180),
   roomNumberPrefix: z.string().optional(),
+  rateOptions: z.record(z.enum(['single', 'double']), z.object({
+    enabled: z.coerce.boolean().default(true),
+    basePrice: z.coerce.number().nonnegative(),
+    offerPrice: z.coerce.number().nonnegative().optional().nullable(),
+    sizeSqft: z.coerce.number().int().positive().optional().nullable(),
+    physicalRooms: z.coerce.number().int().positive().default(1),
+    occupancyAdults: z.coerce.number().int().positive(),
+    occupancyChildren: z.coerce.number().int().min(0).default(0),
+  })).optional(),
 })
 
 const roomFeatureSchema = z.object({
@@ -60,6 +71,32 @@ const inventorySchema = z.object({
   price: z.coerce.number().nonnegative(),
   minNights: z.coerce.number().int().positive().default(1),
   closed: z.coerce.boolean().default(false),
+})
+
+const inventoryBlockSchema = z.object({
+  roomTypeId: z.string().uuid().optional(),
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date(),
+  offlineRooms: z.coerce.number().int().min(0).default(0),
+  closed: z.coerce.boolean().default(false),
+  note: z.string().max(240).optional(),
+})
+
+const rateManagementSchema = z.object({
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date(),
+  rateCategory: z.enum(['all', 'single', 'double']).default('all'),
+  price: z.coerce.number().nonnegative(),
+  minNights: z.coerce.number().int().positive().default(1),
+})
+
+const dateRangeSchema = z.object({
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date(),
+})
+
+const rateDeleteSchema = dateRangeSchema.extend({
+  rateCategory: z.enum(['all', 'single', 'double']).default('all'),
 })
 
 const bookingUpdateSchema = z.object({
@@ -97,6 +134,13 @@ const amenitySchema = z.object({
   active: z.coerce.boolean().default(true),
 })
 
+const faqSchema = z.object({
+  question: z.string().min(5).max(240),
+  answer: z.string().min(5).max(1200),
+  sortOrder: z.coerce.number().int().min(0).max(10000).default(0),
+  active: z.coerce.boolean().default(true),
+})
+
 const offerSchema = z.object({
   title: z.string().min(2),
   description: z.string().min(5),
@@ -114,6 +158,118 @@ const offerSchema = z.object({
 })
 
 adminRoutes.use(requireTenant, authenticate, requireHotelAdmin)
+
+const FIXED_TAX_RATE = 5
+
+function slugify(value) {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || `room-${Date.now()}`
+}
+
+async function uniqueRoomSlug(db, hotelId, name, currentSlug = '') {
+  const base = slugify(currentSlug || name)
+  let slug = base
+  for (let index = 2; index < 100; index += 1) {
+    const { rows } = await db.query(
+      'SELECT id FROM room_types WHERE hotel_id = $1 AND slug = $2 LIMIT 1',
+      [hotelId, slug],
+    )
+    if (!rows[0]) return slug
+    slug = `${base}-${index}`
+  }
+  return `${base}-${Date.now()}`
+}
+
+function normalizeRateOptions(body) {
+  const input = body.rateOptions || {}
+  const options = {}
+  for (const category of ['single', 'double']) {
+    const item = input[category]
+    if (!item?.enabled) continue
+    options[category] = {
+      enabled: true,
+      basePrice: Number(item.basePrice || 0),
+      offerPrice: item.offerPrice === null || item.offerPrice === undefined || item.offerPrice === '' ? null : Number(item.offerPrice),
+      sizeSqft: item.sizeSqft ? Number(item.sizeSqft) : null,
+      physicalRooms: Number(item.physicalRooms || 1),
+      occupancyAdults: Number(item.occupancyAdults || (category === 'single' ? 1 : 2)),
+      occupancyChildren: Number(item.occupancyChildren || 0),
+    }
+  }
+  if (Object.keys(options).length) return options
+  return {
+    [Number(body.occupancyAdults || 1) <= 1 ? 'single' : 'double']: {
+      enabled: true,
+      basePrice: Number(body.basePrice || 0),
+      offerPrice: body.offerPrice === undefined ? null : Number(body.offerPrice),
+      sizeSqft: body.sizeSqft ? Number(body.sizeSqft) : null,
+      physicalRooms: Number(body.physicalRooms || 1),
+      occupancyAdults: Number(body.occupancyAdults || 1),
+      occupancyChildren: Number(body.occupancyChildren || 0),
+    },
+  }
+}
+
+function summarizeRateOptions(body) {
+  const options = normalizeRateOptions(body)
+  const values = Object.values(options)
+  const preferred = options.double || options.single || values[0]
+  return {
+    rateOptions: options,
+    basePrice: Number(preferred?.basePrice || body.basePrice || 0),
+    offerPrice: preferred?.offerPrice === null || preferred?.offerPrice === undefined ? null : Number(preferred.offerPrice),
+    sizeSqft: preferred?.sizeSqft || body.sizeSqft || null,
+    physicalRooms: Math.max(1, ...values.map((item) => Number(item.physicalRooms || 1))),
+    occupancyAdults: Math.max(1, ...values.map((item) => Number(item.occupancyAdults || 1))),
+    occupancyChildren: Math.max(0, ...values.map((item) => Number(item.occupancyChildren || 0))),
+  }
+}
+
+function assertDateRange(startDate, endDate) {
+  if (endDate < startDate) {
+    throw badRequest('End date must be after start date.', 'invalid_date_range')
+  }
+}
+
+function getRateOptions(room = {}) {
+  return room.rate_options && typeof room.rate_options === 'object' ? room.rate_options : {}
+}
+
+function getRoomCapacity(room = {}) {
+  const rates = Object.values(getRateOptions(room))
+  const rateCapacity = Math.max(0, ...rates.map((item) => Number(item?.physicalRooms || 0)))
+  return Math.max(rateCapacity, Number(room.physical_rooms || room.physicalRooms || 0), 1)
+}
+
+function getRoomFallbackPrice(room = {}) {
+  const rates = getRateOptions(room)
+  const preferred = rates.double || rates.single
+  return Number(preferred?.offerPrice || preferred?.basePrice || room.offer_price || room.base_price || 0)
+}
+
+function roomNumberPrefix(value) {
+  return String(value || 'ROOM')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 12) || 'ROOM'
+}
+
+function buildRateOverride(room, rateCategory, price) {
+  const rates = getRateOptions(room)
+  const categories = rateCategory === 'all'
+    ? ['single', 'double'].filter((category) => rates[category])
+    : [rateCategory]
+  const effectiveCategories = categories.length ? categories : [rateCategory === 'all' ? 'double' : rateCategory]
+  return effectiveCategories.reduce((overrides, category) => {
+    overrides[category] = { price: Number(price) }
+    return overrides
+  }, {})
+}
 
 async function assertHomepageRoomLimit(db, hotelId, roomTypeId, showOnHomepage) {
   if (!showOnHomepage) return
@@ -154,7 +310,9 @@ adminRoutes.get('/dashboard', async (req, res) => {
   const { rows: arrivals } = await query(
     `SELECT booking_reference, guest_name, check_in, check_out, total_amount, status
      FROM bookings
-     WHERE hotel_id = $1 AND check_in >= current_date
+     WHERE hotel_id = $1
+       AND check_in >= current_date
+       AND status IN ('confirmed','payment_pending')
      ORDER BY check_in ASC
      LIMIT 8`,
     [req.hotel.id],
@@ -215,10 +373,14 @@ adminRoutes.patch('/hotel-settings', requireRole('hotel_admin', 'super_admin'), 
 
 adminRoutes.get('/bookings', async (req, res) => {
   const { rows } = await query(
-    `SELECT b.*, rt.name AS room_type_name
+    `SELECT b.*, rt.name AS room_type_name, rt.bed_type, rt.size_sqft,
+            rt.description AS room_description, rt.hero_image_url AS room_image_url,
+            i.invoice_number, i.issued_at AS invoice_issued_at, i.pdf_url
      FROM bookings b
      JOIN room_types rt ON rt.id = b.room_type_id
+     LEFT JOIN invoices i ON i.booking_id = b.id
      WHERE b.hotel_id = $1
+       AND b.status <> 'completed'
      ORDER BY b.created_at DESC
      LIMIT 100`,
     [req.hotel.id],
@@ -237,7 +399,7 @@ adminRoutes.post('/bookings', requireRole('hotel_admin', 'super_admin'), validat
     const { rows: roomRows } = await db.query('SELECT id, base_price FROM room_types WHERE id = $1 AND hotel_id = $2', [body.roomTypeId, req.hotel.id])
     if (!roomRows[0]) throw notFound('Room category not found')
     const subtotal = body.totalAmount ?? (Number(roomRows[0].base_price) * nights * body.roomsCount)
-    const taxAmount = Math.round(((subtotal * Number(req.hotel.tax_rate || 0)) / 100 + Number.EPSILON) * 100) / 100
+    const taxAmount = Math.round(((subtotal * FIXED_TAX_RATE) / 100 + Number.EPSILON) * 100) / 100
     const total = Math.round((subtotal + taxAmount + Number.EPSILON) * 100) / 100
     const reference = `RS-MANUAL-${Date.now().toString(36).toUpperCase()}`
     const { rows } = await db.query(
@@ -520,32 +682,30 @@ adminRoutes.get('/rooms', async (req, res) => {
 
 adminRoutes.post('/rooms', requireRole('hotel_admin', 'super_admin'), validate(roomTypeSchema), async (req, res) => {
   const body = req.body
-  const roomNumberPrefix =
-    (body.roomNumberPrefix || body.slug)
-      .toUpperCase()
-      .replace(/[^A-Z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 12) || 'ROOM'
+  const summary = summarizeRateOptions(body)
+  const prefix = roomNumberPrefix(body.roomNumberPrefix || body.slug || body.name)
 
   const room = await transaction(async (db) => {
     await assertHomepageRoomLimit(db, req.hotel.id, null, body.showOnHomepage)
+    const slug = await uniqueRoomSlug(db, req.hotel.id, body.name, body.slug)
     const { rows } = await db.query(
       `INSERT INTO room_types (
         hotel_id, name, slug, description, occupancy_adults, occupancy_children,
-        base_price, offer_price, size_sqft, bed_type, amenities, amenity_items, hero_image_url, gallery, show_on_homepage
+        base_price, offer_price, rate_options, size_sqft, bed_type, amenities, amenity_items, hero_image_url, gallery, show_on_homepage
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16)
       RETURNING *`,
       [
         req.hotel.id,
         body.name,
-        body.slug,
+        slug,
         body.description,
-        body.occupancyAdults,
-        body.occupancyChildren,
-        body.basePrice,
-        body.offerPrice || null,
-        body.sizeSqft || null,
+        summary.occupancyAdults,
+        summary.occupancyChildren,
+        summary.basePrice,
+        summary.offerPrice,
+        JSON.stringify(summary.rateOptions),
+        summary.sizeSqft,
         body.bedType || null,
         body.amenities,
         JSON.stringify(body.amenityItems),
@@ -561,18 +721,19 @@ adminRoutes.post('/rooms', requireRole('hotel_admin', 'super_admin'), validate(r
        SELECT $1, $2, $3 || '-' || lpad(n::text, 3, '0')
        FROM generate_series(1, $4) n
        ON CONFLICT (hotel_id, room_number) DO NOTHING`,
-      [req.hotel.id, roomType.id, roomNumberPrefix, body.physicalRooms],
+      [req.hotel.id, roomType.id, prefix, summary.physicalRooms],
     )
 
     await db.query(
-      `INSERT INTO room_inventory (hotel_id, room_type_id, stay_date, total_rooms, price)
-       SELECT $1, $2, d::date, $3, $4
+      `INSERT INTO room_inventory (hotel_id, room_type_id, stay_date, total_rooms, price, rate_options)
+       SELECT $1, $2, d::date, $3, $4, $6::jsonb
        FROM generate_series(current_date, current_date + ($5::int - 1), interval '1 day') d
        ON CONFLICT (hotel_id, room_type_id, stay_date) DO UPDATE SET
          total_rooms = EXCLUDED.total_rooms,
          price = EXCLUDED.price,
+         rate_options = EXCLUDED.rate_options,
          updated_at = now()`,
-      [req.hotel.id, roomType.id, body.physicalRooms, body.offerPrice || body.basePrice, body.inventoryDays],
+      [req.hotel.id, roomType.id, summary.physicalRooms, summary.offerPrice || summary.basePrice, body.inventoryDays, JSON.stringify(summary.rateOptions)],
     )
 
     return roomType
@@ -596,10 +757,16 @@ adminRoutes.patch('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'
       await assertHomepageRoomLimit(db, req.hotel.id, req.params.roomTypeId, body.showOnHomepage)
     }
     const { rows: previousRows } = await db.query(
-      'SELECT * FROM room_types WHERE id = $1 AND hotel_id = $2 FOR UPDATE',
+      `SELECT rt.*,
+              (SELECT count(*)::int FROM rooms r WHERE r.room_type_id = rt.id AND r.status = 'active') AS physical_rooms
+       FROM room_types rt
+       WHERE rt.id = $1 AND rt.hotel_id = $2
+       FOR UPDATE`,
       [req.params.roomTypeId, req.hotel.id],
     )
     if (!previousRows[0]) throw notFound('Room category not found')
+    const summary = body.rateOptions ? summarizeRateOptions(body) : null
+    const activeRoomCount = Number(previousRows[0].physical_rooms || 0)
     const { rows } = await db.query(
       `UPDATE room_types SET
          name = coalesce($1, name),
@@ -608,27 +775,29 @@ adminRoutes.patch('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'
          occupancy_adults = coalesce($4::int, occupancy_adults),
          occupancy_children = coalesce($5::int, occupancy_children),
          base_price = coalesce($6::numeric, base_price),
-         offer_price = coalesce($7::numeric, offer_price),
-         size_sqft = coalesce($8::int, size_sqft),
-         bed_type = coalesce($9, bed_type),
-         amenities = coalesce($10::text[], amenities),
-         amenity_items = coalesce($11::jsonb, amenity_items),
-         hero_image_url = CASE WHEN $12::text IS NULL THEN hero_image_url ELSE nullif($12, '') END,
-         gallery = coalesce($13::jsonb, gallery),
-         show_on_homepage = coalesce($14::boolean, show_on_homepage),
-         active = coalesce($15::boolean, active),
+         offer_price = CASE WHEN $8::jsonb IS NULL THEN coalesce($7::numeric, offer_price) ELSE $7::numeric END,
+         rate_options = coalesce($8::jsonb, rate_options),
+         size_sqft = coalesce($9::int, size_sqft),
+         bed_type = coalesce($10, bed_type),
+         amenities = coalesce($11::text[], amenities),
+         amenity_items = coalesce($12::jsonb, amenity_items),
+         hero_image_url = CASE WHEN $13::text IS NULL THEN hero_image_url ELSE nullif($13, '') END,
+         gallery = coalesce($14::jsonb, gallery),
+         show_on_homepage = coalesce($15::boolean, show_on_homepage),
+         active = coalesce($16::boolean, active),
          updated_at = now()
-       WHERE id = $16 AND hotel_id = $17
+       WHERE id = $17 AND hotel_id = $18
        RETURNING *`,
       [
         body.name,
-        body.slug,
+        body.slug ? slugify(body.slug) : null,
         body.description,
-        body.occupancyAdults,
-        body.occupancyChildren,
-        body.basePrice,
-        body.offerPrice ?? null,
-        body.sizeSqft,
+        summary?.occupancyAdults ?? body.occupancyAdults,
+        summary?.occupancyChildren ?? body.occupancyChildren,
+        summary?.basePrice ?? body.basePrice,
+        summary ? summary.offerPrice : body.offerPrice ?? null,
+        summary ? JSON.stringify(summary.rateOptions) : null,
+        summary?.sizeSqft ?? body.sizeSqft,
         body.bedType,
         body.amenities,
         body.amenityItems ? JSON.stringify(body.amenityItems) : null,
@@ -641,6 +810,74 @@ adminRoutes.patch('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'
       ],
     )
     if (!rows[0]) throw notFound('Room category not found')
+    if (summary) {
+      const { rows: countRows } = await db.query(
+        `SELECT count(*)::int AS count
+         FROM rooms
+         WHERE hotel_id = $1 AND room_type_id = $2 AND status = 'active'`,
+        [req.hotel.id, req.params.roomTypeId],
+      )
+      const currentCount = Number(countRows[0]?.count || 0)
+      if (summary.physicalRooms > currentCount) {
+        const neededRooms = summary.physicalRooms - currentCount
+        const { rowCount: reactivatedCount } = await db.query(
+          `UPDATE rooms
+           SET status = 'active'
+           WHERE id = ANY (
+             SELECT id
+             FROM rooms
+             WHERE hotel_id = $1 AND room_type_id = $2 AND status = 'inactive'
+             ORDER BY created_at ASC
+             LIMIT $3
+           )`,
+          [req.hotel.id, req.params.roomTypeId, neededRooms],
+        )
+        const remainingRooms = neededRooms - reactivatedCount
+        const prefix = roomNumberPrefix(body.slug || body.name || rows[0].slug || rows[0].name)
+        if (remainingRooms > 0) {
+          await db.query(
+            `INSERT INTO rooms (hotel_id, room_type_id, room_number)
+             SELECT $1, $2, $3 || '-' || lpad(n::text, 3, '0')
+             FROM generate_series($4::int + 1, $4::int + $5::int) n
+             ON CONFLICT (hotel_id, room_number) DO NOTHING`,
+            [req.hotel.id, req.params.roomTypeId, prefix, currentCount + reactivatedCount, remainingRooms],
+          )
+        }
+      } else if (summary.physicalRooms < currentCount) {
+        await db.query(
+          `UPDATE rooms
+           SET status = 'inactive'
+           WHERE id = ANY (
+             SELECT id
+             FROM rooms
+             WHERE hotel_id = $1 AND room_type_id = $2 AND status = 'active'
+             ORDER BY created_at DESC
+             LIMIT $3
+           )`,
+          [req.hotel.id, req.params.roomTypeId, currentCount - summary.physicalRooms],
+        )
+      }
+      await db.query(
+        `UPDATE room_inventory
+         SET total_rooms = greatest($3::int, reserved_rooms),
+             price = $4::numeric,
+             rate_options = $5::jsonb,
+             updated_at = now()
+         WHERE hotel_id = $1
+           AND room_type_id = $2
+           AND stay_date >= current_date
+           AND closed = false
+           AND total_rooms >= least($6::int, $3::int)`,
+        [
+          req.hotel.id,
+          req.params.roomTypeId,
+          summary.physicalRooms,
+          summary.offerPrice || summary.basePrice,
+          JSON.stringify(summary.rateOptions),
+          activeRoomCount,
+        ],
+      )
+    }
     return { previousRoom: previousRows[0], room: rows[0] }
   })
   const { previousRoom, room } = result
@@ -661,18 +898,51 @@ adminRoutes.patch('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'
 })
 
 adminRoutes.delete('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'), async (req, res) => {
-  const { rowCount } = await query(
-    `UPDATE room_types SET active = false, show_on_homepage = false, updated_at = now()
-     WHERE id = $1 AND hotel_id = $2`,
-    [req.params.roomTypeId, req.hotel.id],
-  )
-  if (!rowCount) throw notFound('Room category not found')
-  res.status(204).send()
+  const result = await transaction(async (db) => {
+    const { rows: roomRows } = await db.query(
+      'SELECT * FROM room_types WHERE id = $1 AND hotel_id = $2 FOR UPDATE',
+      [req.params.roomTypeId, req.hotel.id],
+    )
+    const room = roomRows[0]
+    if (!room) throw notFound('Room category not found')
+
+    const { rows: bookingRows } = await db.query(
+      `SELECT count(*)::int AS count
+       FROM bookings
+       WHERE hotel_id = $1 AND room_type_id = $2`,
+      [req.hotel.id, req.params.roomTypeId],
+    )
+    const bookingCount = Number(bookingRows[0]?.count || 0)
+    if (bookingCount > 0) {
+      await db.query(
+        `UPDATE room_types
+         SET active = false, show_on_homepage = false, updated_at = now()
+         WHERE id = $1 AND hotel_id = $2`,
+        [req.params.roomTypeId, req.hotel.id],
+      )
+      await db.query(
+        `DELETE FROM room_inventory
+         WHERE hotel_id = $1
+           AND room_type_id = $2
+           AND stay_date >= current_date`,
+        [req.hotel.id, req.params.roomTypeId],
+      )
+      return { room, mode: 'archived', bookingCount }
+    }
+
+    await db.query('DELETE FROM media_assets WHERE hotel_id = $1 AND entity_type = $2 AND entity_id = $3', [req.hotel.id, 'room_type', req.params.roomTypeId])
+    await db.query('DELETE FROM room_types WHERE id = $1 AND hotel_id = $2', [req.params.roomTypeId, req.hotel.id])
+    return { room, mode: 'deleted', bookingCount: 0 }
+  })
+
+  await syncRemovedCloudinaryMedia(req.hotel.id, collectRoomMedia(result.room), [])
+  res.json({ mode: result.mode, bookingCount: result.bookingCount })
   recordActivity({
     req,
-    action: 'room_hidden',
+    action: result.mode === 'deleted' ? 'room_deleted' : 'room_archived',
     entityType: 'room_type',
     entityId: req.params.roomTypeId,
+    metadata: { mode: result.mode, bookings: result.bookingCount },
   })
 })
 
@@ -707,10 +977,7 @@ adminRoutes.patch('/rooms/:roomTypeId/homepage', requireRole('hotel_admin', 'sup
 adminRoutes.patch('/rooms/:roomTypeId/inventory', requireRole('hotel_admin', 'super_admin'), validate(inventorySchema), async (req, res) => {
   const startDate = req.body.startDate.toISOString().slice(0, 10)
   const endDate = req.body.endDate.toISOString().slice(0, 10)
-  if (endDate < startDate) {
-    res.status(400).json({ error: { code: 'invalid_date_range', message: 'End date must be after start date' } })
-    return
-  }
+  assertDateRange(startDate, endDate)
 
   const { rows: roomRows } = await query(
     'SELECT id FROM room_types WHERE id = $1 AND hotel_id = $2',
@@ -747,6 +1014,391 @@ adminRoutes.patch('/rooms/:roomTypeId/inventory', requireRole('hotel_admin', 'su
     entityType: 'room_type',
     entityId: req.params.roomTypeId,
     metadata: { startDate, endDate, updatedDays: rowCount },
+  })
+})
+
+adminRoutes.get('/inventory-blocks', async (req, res) => {
+  const { rows } = await query(
+    `WITH room_caps AS (
+       SELECT
+         rt.id,
+         rt.name,
+         greatest(
+           coalesce((rt.rate_options->'single'->>'physicalRooms')::int, 0),
+           coalesce((rt.rate_options->'double'->>'physicalRooms')::int, 0),
+           (SELECT count(*)::int FROM rooms r WHERE r.room_type_id = rt.id AND r.status = 'active'),
+           1
+         ) AS capacity
+       FROM room_types rt
+       WHERE rt.hotel_id = $1
+     ),
+     marked AS (
+       SELECT
+         ri.room_type_id,
+         rc.name AS room_name,
+         rc.capacity,
+         ri.stay_date,
+         ri.total_rooms,
+         ri.reserved_rooms,
+         ri.closed,
+         greatest(rc.capacity - ri.total_rooms, 0)::int AS offline_rooms,
+         ri.stay_date - (row_number() OVER (
+           PARTITION BY ri.room_type_id, ri.total_rooms, ri.closed
+           ORDER BY ri.stay_date
+         )::int * interval '1 day') AS grp
+       FROM room_inventory ri
+       JOIN room_caps rc ON rc.id = ri.room_type_id
+       WHERE ri.hotel_id = $1
+         AND ri.stay_date >= current_date
+         AND (ri.closed = true OR ri.total_rooms < rc.capacity)
+     )
+     SELECT
+       (room_type_id::text || ':' || min(stay_date)::text || ':' || max(stay_date)::text || ':' || total_rooms::text || ':' || closed::text) AS id,
+       room_type_id,
+       room_name,
+       min(stay_date)::text AS start_date,
+       max(stay_date)::text AS end_date,
+       count(*)::int AS days,
+       capacity,
+       total_rooms,
+       offline_rooms,
+       max(reserved_rooms)::int AS reserved_rooms,
+       closed
+     FROM marked
+     GROUP BY room_type_id, room_name, capacity, total_rooms, offline_rooms, closed, grp
+     ORDER BY start_date ASC, room_name ASC`,
+    [req.hotel.id],
+  )
+  res.json({ entries: rows })
+})
+
+adminRoutes.get('/rate-plans', async (req, res) => {
+  const { rows } = await query(
+    `WITH expanded AS (
+       SELECT
+         ri.room_type_id,
+         rt.name AS room_name,
+         ri.stay_date,
+         ri.min_nights,
+         rate.key AS rate_category,
+         (rate.value->>'price')::numeric AS price,
+         ri.stay_date - (row_number() OVER (
+           PARTITION BY ri.room_type_id, rate.key, (rate.value->>'price')::numeric, ri.min_nights
+           ORDER BY ri.stay_date
+         )::int * interval '1 day') AS grp
+     FROM room_inventory ri
+     JOIN room_types rt ON rt.id = ri.room_type_id AND rt.hotel_id = ri.hotel_id
+     CROSS JOIN LATERAL jsonb_each(coalesce(ri.rate_options, '{}'::jsonb)) AS rate(key, value)
+       WHERE ri.hotel_id = $1
+         AND ri.stay_date >= current_date
+         AND rate.value ? 'price'
+     ),
+     grouped AS (
+       SELECT
+         (room_type_id::text || ':' || rate_category || ':' || min(stay_date)::text || ':' || max(stay_date)::text || ':' || price::text || ':' || min_nights::text) AS id,
+         room_type_id,
+         room_name,
+         rate_category,
+         min(stay_date)::text AS start_date,
+         max(stay_date)::text AS end_date,
+         count(*)::int AS days,
+         price,
+         min_nights
+       FROM expanded
+       GROUP BY room_type_id, room_name, rate_category, price, min_nights, grp
+     )
+     SELECT
+       (room_type_id::text || ':' || array_to_string(array_agg(rate_category ORDER BY rate_category), '+') || ':' || start_date::text || ':' || end_date::text || ':' || price::text || ':' || min_nights::text) AS id,
+       room_type_id,
+       room_name,
+       CASE
+         WHEN array_agg(rate_category) @> ARRAY['single', 'double']::text[] THEN 'all'
+         ELSE min(rate_category)
+       END AS rate_category,
+       array_agg(rate_category ORDER BY rate_category) AS rate_categories,
+       start_date::text AS start_date,
+       end_date::text AS end_date,
+       days,
+       price,
+       min_nights
+     FROM grouped
+     GROUP BY room_type_id, room_name, start_date, end_date, days, price, min_nights
+     ORDER BY start_date ASC, room_name ASC, rate_category ASC`,
+    [req.hotel.id],
+  )
+  res.json({ entries: rows })
+})
+
+adminRoutes.get('/rooms/:roomTypeId/calendar-summary', async (req, res) => {
+  const days = Math.min(Math.max(Number(req.query.days || 180), 14), 370)
+  const { rows: roomRows } = await query(
+    `SELECT rt.*,
+            (SELECT count(*)::int FROM rooms r WHERE r.room_type_id = rt.id AND r.status = 'active') AS physical_rooms
+     FROM room_types rt
+     WHERE rt.id = $1 AND rt.hotel_id = $2`,
+    [req.params.roomTypeId, req.hotel.id],
+  )
+  const room = roomRows[0]
+  if (!room) throw notFound('Room category not found')
+
+  const capacity = getRoomCapacity(room)
+  const fallbackPrice = getRoomFallbackPrice(room)
+  const rates = getRateOptions(room)
+  const { rows } = await query(
+    `WITH dates AS (
+       SELECT d::date AS stay_date
+       FROM generate_series(current_date, current_date + ($3::int - 1), interval '1 day') d
+     )
+     SELECT
+       d.stay_date::text AS stay_date,
+       coalesce(ri.total_rooms, $4::int)::int AS total_rooms,
+       coalesce(ri.reserved_rooms, 0)::int AS reserved_rooms,
+       coalesce(ri.closed, false)::boolean AS closed,
+       coalesce(ri.price, $5::numeric)::numeric AS price,
+       coalesce(ri.min_nights, 1)::int AS min_nights,
+       coalesce(ri.rate_options, '{}'::jsonb) AS rate_options,
+       nullif(ri.rate_options->'single'->>'price', '')::numeric AS single_override_price,
+       nullif(ri.rate_options->'double'->>'price', '')::numeric AS double_override_price
+     FROM dates d
+     LEFT JOIN room_inventory ri
+       ON ri.hotel_id = $1
+      AND ri.room_type_id = $2
+      AND ri.stay_date = d.stay_date
+     ORDER BY d.stay_date ASC`,
+    [req.hotel.id, req.params.roomTypeId, days, capacity, fallbackPrice],
+  )
+
+  res.json({
+    room: {
+      id: room.id,
+      name: room.name,
+      capacity,
+      baseRates: {
+        single: rates.single ? Number(rates.single.offerPrice || rates.single.basePrice || 0) : null,
+        double: rates.double ? Number(rates.double.offerPrice || rates.double.basePrice || 0) : null,
+      },
+    },
+    days: rows.map((day) => {
+      const totalRooms = day.total_rooms === null || day.total_rooms === undefined ? capacity : Number(day.total_rooms)
+      const reservedRooms = Number(day.reserved_rooms || 0)
+      const closed = Boolean(day.closed)
+      return {
+        ...day,
+        total_rooms: totalRooms,
+        reserved_rooms: reservedRooms,
+        price: Number(day.price || fallbackPrice),
+        min_nights: Number(day.min_nights || 1),
+        single_override_price: day.single_override_price === null ? null : Number(day.single_override_price),
+        double_override_price: day.double_override_price === null ? null : Number(day.double_override_price),
+        offline_rooms: closed ? capacity : Math.max(0, capacity - totalRooms),
+        sellable_online: closed ? 0 : Math.max(0, totalRooms - reservedRooms),
+      }
+    }),
+  })
+})
+
+adminRoutes.patch('/rooms/:roomTypeId/inventory-blocks', requireRole('hotel_admin', 'super_admin'), validate(inventoryBlockSchema), async (req, res) => {
+  const startDate = req.body.startDate.toISOString().slice(0, 10)
+  const endDate = req.body.endDate.toISOString().slice(0, 10)
+  assertDateRange(startDate, endDate)
+
+  const { rows: roomRows } = await query(
+    `SELECT rt.*,
+            (SELECT count(*)::int FROM rooms r WHERE r.room_type_id = rt.id AND r.status = 'active') AS physical_rooms
+     FROM room_types rt
+     WHERE rt.id = $1 AND rt.hotel_id = $2`,
+    [req.params.roomTypeId, req.hotel.id],
+  )
+  const room = roomRows[0]
+  if (!room) throw notFound('Room category not found')
+
+  const capacity = getRoomCapacity(room)
+  const offlineRooms = req.body.closed ? capacity : Math.min(Number(req.body.offlineRooms || 0), capacity)
+  const totalRooms = req.body.closed ? 0 : Math.max(0, capacity - offlineRooms)
+  const fallbackPrice = getRoomFallbackPrice(room)
+
+  const { rowCount } = await query(
+    `INSERT INTO room_inventory (hotel_id, room_type_id, stay_date, total_rooms, price, rate_options, closed)
+     SELECT $1, $2, d::date, $3, $4, $5::jsonb, $6
+     FROM generate_series($7::date, $8::date, interval '1 day') d
+     ON CONFLICT (hotel_id, room_type_id, stay_date) DO UPDATE SET
+       total_rooms = greatest(EXCLUDED.total_rooms, room_inventory.reserved_rooms),
+       closed = EXCLUDED.closed,
+       rate_options = CASE
+         WHEN room_inventory.rate_options = '{}'::jsonb THEN EXCLUDED.rate_options
+         ELSE room_inventory.rate_options
+       END,
+       updated_at = now()`,
+    [
+      req.hotel.id,
+      req.params.roomTypeId,
+      totalRooms,
+      fallbackPrice,
+      JSON.stringify(getRateOptions(room)),
+      req.body.closed,
+      startDate,
+      endDate,
+    ],
+  )
+
+  res.json({ updatedDays: rowCount, capacity, offlineRooms, totalRooms })
+  recordActivity({
+    req,
+    action: 'inventory_block_updated',
+    entityType: 'room_type',
+    entityId: req.params.roomTypeId,
+    metadata: { startDate, endDate, offlineRooms, totalRooms, closed: req.body.closed, note: req.body.note || '' },
+  })
+})
+
+adminRoutes.delete('/rooms/:roomTypeId/inventory-blocks', requireRole('hotel_admin', 'super_admin'), validate(dateRangeSchema), async (req, res) => {
+  const startDate = req.body.startDate.toISOString().slice(0, 10)
+  const endDate = req.body.endDate.toISOString().slice(0, 10)
+  assertDateRange(startDate, endDate)
+
+  const { rows: roomRows } = await query(
+    `SELECT rt.*,
+            (SELECT count(*)::int FROM rooms r WHERE r.room_type_id = rt.id AND r.status = 'active') AS physical_rooms
+     FROM room_types rt
+     WHERE rt.id = $1 AND rt.hotel_id = $2`,
+    [req.params.roomTypeId, req.hotel.id],
+  )
+  const room = roomRows[0]
+  if (!room) throw notFound('Room category not found')
+
+  const capacity = getRoomCapacity(room)
+  const { rowCount } = await query(
+    `UPDATE room_inventory
+     SET total_rooms = $3::int,
+         closed = false,
+         updated_at = now()
+     WHERE hotel_id = $1
+       AND room_type_id = $2
+       AND stay_date BETWEEN $4::date AND $5::date`,
+    [req.hotel.id, req.params.roomTypeId, capacity, startDate, endDate],
+  )
+  const { rows: remainingRows } = await query(
+    `SELECT count(*)::int AS count
+     FROM room_inventory
+     WHERE hotel_id = $1
+       AND room_type_id = $2
+       AND stay_date BETWEEN $3::date AND $4::date
+       AND (closed = true OR total_rooms < $5::int)`,
+    [req.hotel.id, req.params.roomTypeId, startDate, endDate, capacity],
+  )
+
+  res.json({ updatedDays: rowCount, capacity, remainingBlockedDays: Number(remainingRows[0]?.count || 0) })
+  recordActivity({
+    req,
+    action: 'inventory_block_deleted',
+    entityType: 'room_type',
+    entityId: req.params.roomTypeId,
+    metadata: { startDate, endDate, updatedDays: rowCount },
+  })
+})
+
+adminRoutes.patch('/rooms/:roomTypeId/rates', requireRole('hotel_admin', 'super_admin'), validate(rateManagementSchema), async (req, res) => {
+  const startDate = req.body.startDate.toISOString().slice(0, 10)
+  const endDate = req.body.endDate.toISOString().slice(0, 10)
+  assertDateRange(startDate, endDate)
+
+  const { rows: roomRows } = await query(
+    `SELECT rt.*,
+            (SELECT count(*)::int FROM rooms r WHERE r.room_type_id = rt.id AND r.status = 'active') AS physical_rooms
+     FROM room_types rt
+     WHERE rt.id = $1 AND rt.hotel_id = $2`,
+    [req.params.roomTypeId, req.hotel.id],
+  )
+  const room = roomRows[0]
+  if (!room) throw notFound('Room category not found')
+
+  const capacity = getRoomCapacity(room)
+  const rateOverride = buildRateOverride(room, req.body.rateCategory, req.body.price)
+  const { rowCount } = await query(
+    `INSERT INTO room_inventory (hotel_id, room_type_id, stay_date, total_rooms, price, rate_options, min_nights)
+     SELECT $1, $2, d::date, $3, $4, $5::jsonb, $6
+     FROM generate_series($7::date, $8::date, interval '1 day') d
+     ON CONFLICT (hotel_id, room_type_id, stay_date) DO UPDATE SET
+       price = EXCLUDED.price,
+       rate_options = coalesce(room_inventory.rate_options, '{}'::jsonb) || EXCLUDED.rate_options,
+       min_nights = EXCLUDED.min_nights,
+       updated_at = now()`,
+    [
+      req.hotel.id,
+      req.params.roomTypeId,
+      capacity,
+      req.body.price,
+      JSON.stringify(rateOverride),
+      req.body.minNights,
+      startDate,
+      endDate,
+    ],
+  )
+
+  res.json({ updatedDays: rowCount, rateCategory: req.body.rateCategory, price: Number(req.body.price) })
+  recordActivity({
+    req,
+    action: 'rate_plan_updated',
+    entityType: 'room_type',
+    entityId: req.params.roomTypeId,
+    metadata: { startDate, endDate, rateCategory: req.body.rateCategory, price: Number(req.body.price), minNights: req.body.minNights },
+  })
+})
+
+adminRoutes.delete('/rooms/:roomTypeId/rates', requireRole('hotel_admin', 'super_admin'), validate(rateDeleteSchema), async (req, res) => {
+  const startDate = req.body.startDate.toISOString().slice(0, 10)
+  const endDate = req.body.endDate.toISOString().slice(0, 10)
+  assertDateRange(startDate, endDate)
+
+  const { rows: roomRows } = await query(
+    'SELECT id FROM room_types WHERE id = $1 AND hotel_id = $2',
+    [req.params.roomTypeId, req.hotel.id],
+  )
+  if (!roomRows[0]) throw notFound('Room category not found')
+
+  const resetExpression = req.body.rateCategory === 'all'
+    ? "coalesce(rate_options, '{}'::jsonb) - 'single' - 'double'"
+    : `coalesce(rate_options, '{}'::jsonb) - '${req.body.rateCategory}'`
+  const { rows } = await query(
+    `WITH updated AS (
+       UPDATE room_inventory
+       SET rate_options = ${resetExpression},
+           min_nights = CASE
+             WHEN NOT EXISTS (
+               SELECT 1
+               FROM jsonb_each(${resetExpression}) AS remaining(key, value)
+               WHERE remaining.value ? 'price'
+             ) THEN 1
+             ELSE min_nights
+           END,
+           updated_at = now()
+       WHERE hotel_id = $1
+         AND room_type_id = $2
+         AND stay_date BETWEEN $3::date AND $4::date
+       RETURNING 1
+     )
+     SELECT count(*)::int AS updated_days FROM updated`,
+    [req.hotel.id, req.params.roomTypeId, startDate, endDate],
+  )
+  const rowCount = rows[0]?.updated_days || 0
+  const { rows: remainingRows } = await query(
+    `SELECT count(*)::int AS count
+     FROM room_inventory ri
+     CROSS JOIN LATERAL jsonb_each(coalesce(ri.rate_options, '{}'::jsonb)) AS rate(key, value)
+     WHERE ri.hotel_id = $1
+       AND ri.room_type_id = $2
+       AND ri.stay_date BETWEEN $3::date AND $4::date
+       AND rate.value ? 'price'`,
+    [req.hotel.id, req.params.roomTypeId, startDate, endDate],
+  )
+
+  res.json({ updatedDays: rowCount, rateCategory: req.body.rateCategory, remainingOverrideDays: Number(remainingRows[0]?.count || 0) })
+  recordActivity({
+    req,
+    action: 'rate_plan_deleted',
+    entityType: 'room_type',
+    entityId: req.params.roomTypeId,
+    metadata: { startDate, endDate, rateCategory: req.body.rateCategory, updatedDays: rowCount },
   })
 })
 
@@ -829,6 +1481,69 @@ adminRoutes.delete('/amenities/:amenityId', requireRole('hotel_admin', 'super_ad
     action: 'amenity_deleted',
     entityType: 'amenity',
     entityId: req.params.amenityId,
+  })
+})
+
+adminRoutes.get('/faqs', async (req, res) => {
+  const { rows } = await query(
+    `SELECT id, question, answer, sort_order, active, created_at
+     FROM hotel_faqs
+     WHERE hotel_id = $1
+     ORDER BY sort_order ASC, created_at DESC`,
+    [req.hotel.id],
+  )
+  res.json({ faqs: rows })
+})
+
+adminRoutes.post('/faqs', requireRole('hotel_admin', 'super_admin'), validate(faqSchema), async (req, res) => {
+  const { rows } = await query(
+    `INSERT INTO hotel_faqs (hotel_id, question, answer, sort_order, active)
+     VALUES ($1,$2,$3,$4,$5)
+     RETURNING id, question, answer, sort_order, active, created_at`,
+    [req.hotel.id, req.body.question, req.body.answer, req.body.sortOrder, req.body.active],
+  )
+  res.status(201).json({ faq: rows[0] })
+  recordActivity({
+    req,
+    action: 'faq_saved',
+    entityType: 'faq',
+    entityId: rows[0].id,
+    metadata: { question: rows[0].question },
+  })
+})
+
+adminRoutes.patch('/faqs/:faqId', requireRole('hotel_admin', 'super_admin'), validate(faqSchema.partial()), async (req, res) => {
+  const { rows } = await query(
+    `UPDATE hotel_faqs SET
+       question = coalesce($1, question),
+       answer = coalesce($2, answer),
+       sort_order = coalesce($3::int, sort_order),
+       active = coalesce($4::boolean, active),
+       updated_at = now()
+     WHERE id = $5 AND hotel_id = $6
+     RETURNING id, question, answer, sort_order, active, created_at`,
+    [req.body.question, req.body.answer, req.body.sortOrder, req.body.active, req.params.faqId, req.hotel.id],
+  )
+  if (!rows[0]) throw notFound('FAQ not found')
+  res.json({ faq: rows[0] })
+  recordActivity({
+    req,
+    action: 'faq_updated',
+    entityType: 'faq',
+    entityId: rows[0].id,
+    metadata: { question: rows[0].question },
+  })
+})
+
+adminRoutes.delete('/faqs/:faqId', requireRole('hotel_admin', 'super_admin'), async (req, res) => {
+  const { rowCount } = await query('DELETE FROM hotel_faqs WHERE id = $1 AND hotel_id = $2', [req.params.faqId, req.hotel.id])
+  if (!rowCount) throw notFound('FAQ not found')
+  res.status(204).send()
+  recordActivity({
+    req,
+    action: 'faq_deleted',
+    entityType: 'faq',
+    entityId: req.params.faqId,
   })
 })
 

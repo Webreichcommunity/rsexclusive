@@ -7,6 +7,7 @@ import { useAsync } from '../../hooks/useAsync.js'
 import { useAuth } from '../../modules/auth/authContext.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { buildHotelUrl, buildTenantPath, isConsolePath, stripTenantFromPath } from '../../modules/tenant/resolveTenant.js'
+import { logoDisplayUrl } from '../../utils/logoUrl.js'
 
 const fallbackHomeMediaImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1800&q=80'
 
@@ -43,6 +44,7 @@ export function AppShell({ children, mode }) {
         ['Offers', tenantPath('/#offers', mode)],
         ['Rooms', tenantPath('/book', mode)],
         ['Experience', tenantPath('/#dining', mode)],
+        ['FAQ', tenantPath('/faq', mode)],
       ]
     : [
         ['Properties', '/#properties'],
@@ -91,11 +93,11 @@ export function AppShell({ children, mode }) {
       <header className={headerClass}>
         <div className="container-page flex min-h-[72px] items-center justify-between gap-4">
           <Link to={tenantPath('/', mode)} onClick={() => !mode.isTenant && window.scrollTo({ top: 0, behavior: 'smooth' })} className="group flex min-w-0 items-center gap-3">
-            <span className={`grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-md text-base font-bold transition ${(mode.isTenant && hotel?.branding?.logoUrl) || !mode.isTenant ? 'bg-transparent' : 'bg-white text-gray-900 group-hover:bg-amberline group-hover:text-white'}`}>
+            <span className={`grid h-12 w-12 shrink-0 place-items-center overflow-visible text-base font-bold transition ${(mode.isTenant && hotel?.branding?.logoUrl) || !mode.isTenant ? 'bg-transparent' : 'rounded-md bg-white text-gray-900 group-hover:bg-amberline group-hover:text-white'}`}>
               {!mode.isTenant ? (
                 <img src="/mainlogo.png" alt={`${brandName} logo`} className="h-full w-full object-contain" />
               ) : hotel?.branding?.logoUrl ? (
-                <img src={hotel.branding.logoUrl} alt={`${brandName} logo`} className="h-full w-full object-contain" />
+                <img src={logoDisplayUrl(hotel.branding.logoUrl)} alt={`${brandName} logo`} className="h-full w-full object-contain" />
               ) : (
                 initials(brandName)
               )}
@@ -181,8 +183,8 @@ export function AppShell({ children, mode }) {
               >
                 <div className="flex min-h-[72px] items-center justify-between border-b border-mist px-4">
                   <Link to={tenantPath('/', mode)} onClick={() => setOpen(false)} className="flex min-w-0 items-center gap-3">
-                    <span className={`grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-md text-sm font-bold ${(mode.isTenant && hotel?.branding?.logoUrl) || !mode.isTenant ? 'bg-transparent' : 'bg-charcoal text-white'}`}>
-                      {!mode.isTenant ? <img src="/mainlogo.png" alt={`${brandName} logo`} className="h-full w-full object-contain" /> : hotel?.branding?.logoUrl ? <img src={hotel.branding.logoUrl} alt={`${brandName} logo`} className="h-full w-full object-contain" /> : initials(brandName)}
+                    <span className={`grid h-11 w-11 shrink-0 place-items-center overflow-visible text-sm font-bold ${(mode.isTenant && hotel?.branding?.logoUrl) || !mode.isTenant ? 'bg-transparent' : 'rounded-md bg-charcoal text-white'}`}>
+                      {!mode.isTenant ? <img src="/mainlogo.png" alt={`${brandName} logo`} className="h-full w-full object-contain" /> : hotel?.branding?.logoUrl ? <img src={logoDisplayUrl(hotel.branding.logoUrl)} alt={`${brandName} logo`} className="h-full w-full object-contain" /> : initials(brandName)}
                     </span>
                     <span className="min-w-0 leading-tight">
                       <span className="block truncate text-base font-bold text-charcoal">{brandName}</span>
@@ -224,7 +226,10 @@ export function AppShell({ children, mode }) {
       {mode.isTenant ? <footer className="relative z-10 bg-[linear-gradient(180deg,#222222_0%,#111111_100%)] py-12 text-white md:py-16">
         <div className="container-page grid gap-10 lg:grid-cols-[1.1fr_0.9fr_1fr_0.75fr]">
           <div>
-            <p className="text-4xl font-semibold leading-tight">{brandName}</p>
+            <div className="flex items-center gap-4">
+              {hotel?.branding?.logoUrl ? <img src={logoDisplayUrl(hotel.branding.logoUrl)} alt={`${brandName} logo`} className="h-16 w-16 shrink-0 object-contain" /> : null}
+              <p className="text-4xl font-semibold leading-tight">{brandName}</p>
+            </div>
             <p className="mt-4 max-w-md text-sm leading-7 text-stone-300">
               {premiumHotelSummary(hotel)}
             </p>
@@ -251,9 +256,9 @@ export function AppShell({ children, mode }) {
           <div>
             <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-stone-400">Contact</p>
             <div className="mt-4 grid gap-3 text-sm text-stone-300">
-              <span className="flex items-center gap-2"><Phone size={16} className="text-amber-100" /> {hotelPhones(hotel).join(', ') || '+91 90000 00000'}</span>
-              <span className="flex items-center gap-2"><Mail size={16} className="text-amber-100" /> {hotel?.contact?.email || 'bookings@example.com'}</span>
-              <span className="flex items-center gap-2"><MapPin size={16} className="text-amber-100" /> {formatAddress(hotel)}</span>
+              <span className="flex items-center gap-2"><Phone size={16} className="shrink-0 text-amber-100" /> <span className="min-w-0 break-words">{hotelPhones(hotel).join(', ') || '+91 90000 00000'}</span></span>
+              <span className="flex items-center gap-2"><Mail size={16} className="shrink-0 text-amber-100" /> <span className="min-w-0 break-words">{hotel?.contact?.email || 'bookings@example.com'}</span></span>
+              <span className="flex items-start gap-2"><MapPin size={17} className="mt-0.5 shrink-0 text-amber-100" /> <span className="line-clamp-3 min-w-0 leading-6">{formatAddress(hotel)}</span></span>
             </div>
           </div>
           <div>
@@ -262,6 +267,8 @@ export function AppShell({ children, mode }) {
               <Link to={tenantPath('/#offers', mode)} className="transition hover:text-white">Live offers</Link>
               <Link to={tenantPath('/book', mode)} className="transition hover:text-white">Rooms</Link>
               <Link to={tenantPath('/#dining', mode)} className="transition hover:text-white">Experience</Link>
+              <Link to={tenantPath('/faq', mode)} className="transition hover:text-white">FAQ</Link>
+              <Link to={tenantPath('/terms', mode)} className="transition hover:text-white">Terms and Conditions</Link>
               <span className="flex items-center gap-2 pt-2 text-stone-400"><Globe2 size={16} /> Direct hotel booking</span>
             </div>
           </div>

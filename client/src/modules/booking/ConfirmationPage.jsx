@@ -4,6 +4,7 @@ import { FadeIn, Stagger, StaggerItem } from '../../components/ui/Motion.jsx'
 import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
+import { buildTenantPath, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
 
 export function ConfirmationPage() {
   const { bookingReference } = useParams()
@@ -19,6 +20,7 @@ export function ConfirmationPage() {
   if (fallback.loading) return <LoadingState label="Loading booking confirmation" />
 
   const booking = fallback.data?.booking || state?.booking
+  const tenantMode = resolveTenantFromLocation()
   const paymentPlan = booking?.metadata?.paymentPlan || {}
   const paidAmount = paymentPlan.paidAmount ?? booking?.total_amount
   const balanceDue = paymentPlan.balanceDue ?? 0
@@ -51,13 +53,13 @@ export function ConfirmationPage() {
         ) : null}
 
         <div className="flex flex-col gap-3 border-t border-mist p-5 sm:flex-row sm:justify-center">
-          <Link to="/account" className="btn-primary"><ReceiptText size={18} /> View booking</Link>
+          <Link to={buildTenantPath('/account', tenantMode)} className="btn-primary"><ReceiptText size={18} /> View booking</Link>
           {booking?.pdf_url ? (
             <a href={booking.pdf_url} className="btn-secondary"><Download size={18} /> Download receipt</a>
           ) : (
             <span className="btn-secondary pointer-events-none opacity-70"><Download size={18} /> Receipt preparing</span>
           )}
-          <Link to="/" className="btn-secondary">Back to hotel</Link>
+          <Link to={buildTenantPath('/', tenantMode)} className="btn-secondary">Back to hotel</Link>
         </div>
       </FadeIn>
     </main>

@@ -2,6 +2,9 @@ import { getFirebaseToken } from '../modules/auth/firebaseClient.js'
 import { resolveTenantFromLocation } from '../modules/tenant/resolveTenant.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api'
+const PUBLIC_GET_CACHE_MS = 30_000
+const getCache = new Map()
+const inFlightGets = new Map()
 
 function withTenant(url) {
   const tenant = resolveTenantFromLocation()
@@ -17,18 +20,43 @@ export async function apiFetch(url, options = {}) {
   if (token) headers.set('authorization', `Bearer ${token}`)
 
   const { authToken: _authToken, ...fetchOptions } = options
-  const response = await fetch(withTenant(url), {
+  const requestUrl = withTenant(url)
+  const method = String(fetchOptions.method || 'GET').toUpperCase()
+  const canCache = method === 'GET' && isPublicCachedEndpoint(requestUrl)
+  const cacheKey = canCache ? `${requestUrl}::${token || 'guest'}` : ''
+
+  if (canCache) {
+    const cached = getCache.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) return cached.data
+    const pending = inFlightGets.get(cacheKey)
+    if (pending) return pending
+  }
+
+  const request = fetch(requestUrl, {
     ...fetchOptions,
     headers,
     body: options.body && !(options.body instanceof FormData) ? JSON.stringify(options.body) : options.body,
   })
+    .then(async (response) => {
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        const message = toCustomerMessage(payload?.error?.message, response.status)
+        throw new Error(message)
+      }
+      if (canCache) getCache.set(cacheKey, { data: payload, expiresAt: Date.now() + PUBLIC_GET_CACHE_MS })
+      return payload
+    })
+    .finally(() => {
+      if (canCache) inFlightGets.delete(cacheKey)
+    })
 
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    const message = toCustomerMessage(payload?.error?.message, response.status)
-    throw new Error(message)
-  }
-  return payload
+  if (canCache) inFlightGets.set(cacheKey, request)
+  return request
+}
+
+function isPublicCachedEndpoint(url) {
+  const pathname = new URL(url).pathname
+  return pathname.endsWith('/tenant') || pathname.endsWith('/hotels')
 }
 
 function toCustomerMessage(message, status) {

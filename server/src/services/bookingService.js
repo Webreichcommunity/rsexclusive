@@ -9,8 +9,9 @@ import { sendBookingConfirmation } from './emailService.js'
 
 const bookingRef = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 10)
 const LOYALTY_POINT_VALUE = 100
-const PARTIAL_ADVANCE_PERCENT = 50
+const PARTIAL_ADVANCE_PERCENT = 25
 const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
+const FIXED_TAX_RATE = 5
 
 async function ensureCustomer(db, hotelId, user) {
   if (!user) return null
@@ -27,7 +28,7 @@ async function ensureCustomer(db, hotelId, user) {
 
 export function calculateBookingAmounts(subtotal, taxRate) {
   const subtotalAmount = Math.round((Number(subtotal || 0) + Number.EPSILON) * 100) / 100
-  const tax = Math.round(((subtotalAmount * Number(taxRate || 0)) / 100 + Number.EPSILON) * 100) / 100
+  const tax = Math.round(((subtotalAmount * FIXED_TAX_RATE) / 100 + Number.EPSILON) * 100) / 100
   return {
     subtotal: subtotalAmount,
     tax,
@@ -132,6 +133,24 @@ async function findSelectedAmenities(db, hotelId, selectedAmenityIds = []) {
   }))
 }
 
+async function findExtraBedAmenityId(db, hotelId) {
+  const { rows } = await db.query(
+    `SELECT id
+     FROM hotel_amenities
+     WHERE hotel_id = $1
+       AND active = true
+       AND (
+         name ILIKE '%extra bed%'
+         OR name ILIKE '%additional bed%'
+         OR name ILIKE '%rollaway%'
+       )
+     ORDER BY price ASC, name ASC
+     LIMIT 1`,
+    [hotelId],
+  )
+  return rows[0]?.id || ''
+}
+
 async function reserveLoyaltyRedemption(db, _hotelId, userId, bookingId, requestedPoints, eligibleSubtotal, redemptionMinPoints = 0) {
   if (!requestedPoints || !userId) return { points: 0, amount: 0, pointValue: LOYALTY_POINT_VALUE }
 
@@ -208,8 +227,16 @@ export async function createBookingHold({ hotel, user, payload }) {
       throw conflict('Inventory changed during checkout. Please choose another room.', 'inventory_changed')
     }
 
-    const roomSubtotal = lockedRows.reduce((sum, row) => sum + Number(row.price) * roomsCount, 0)
-    const selectedAmenities = await findSelectedAmenities(db, hotel.id, payload.selectedAmenityIds)
+    const roomSubtotal = Number(availability[0].subtotal || lockedRows.reduce((sum, row) => sum + Number(row.price), 0)) * roomsCount
+    const selectedAmenityIds = [...new Set(payload.selectedAmenityIds || [])]
+    if (availability[0]?.extra_bed_recommended) {
+      const extraBedAmenityId = await findExtraBedAmenityId(db, hotel.id)
+      if (extraBedAmenityId && !selectedAmenityIds.includes(extraBedAmenityId)) {
+        selectedAmenityIds.push(extraBedAmenityId)
+      }
+    }
+
+    const selectedAmenities = await findSelectedAmenities(db, hotel.id, selectedAmenityIds)
     const amenitySubtotal = selectedAmenities.reduce((sum, amenity) => sum + Number(amenity.price || 0) * roomsCount, 0)
     const grossSubtotal = Math.round((roomSubtotal + amenitySubtotal + Number.EPSILON) * 100) / 100
     const appliedOffer = await findApplicableOffer(db, hotel.id, user?.id || null, payload.offerId)
@@ -221,12 +248,28 @@ export async function createBookingHold({ hotel, user, payload }) {
     const bookingMetadata = {
       pricing: {
         roomSubtotal: Math.round((roomSubtotal + Number.EPSILON) * 100) / 100,
+        rateCategory: availability[0].selected_rate_category || 'standard',
         amenitySubtotal: Math.round((amenitySubtotal + Number.EPSILON) * 100) / 100,
         grossSubtotal,
         offerDiscount: discountAmount,
         loyaltyDiscount: 0,
       },
+      termsAndConditions: {
+        accepted: true,
+        version: payload.termsVersion || '2026-09-19',
+        acceptedAt: new Date().toISOString(),
+        source: 'room_booking',
+      },
       selectedAmenities,
+      ...(availability[0]?.extra_bed_recommended
+        ? {
+            extraBed: {
+              required: true,
+              count: Number(availability[0].extra_bed_count || 1),
+              note: 'Extra bed amenity added for requested adult occupancy.',
+            },
+          }
+        : {}),
       ...(appliedOffer
         ? {
             offer: {
@@ -303,6 +346,7 @@ export async function createBookingHold({ hotel, user, payload }) {
       pricing: {
         ...bookingMetadata.pricing,
         taxableSubtotal: amounts.subtotal,
+        taxRate: FIXED_TAX_RATE,
         tax: amounts.tax,
         total: amounts.total,
         loyaltyDiscount: loyaltyRedemption.amount,
@@ -335,6 +379,7 @@ export async function createBookingHold({ hotel, user, payload }) {
       amount: paymentPlan.paidAmount,
       currency: booking.currency,
       receipt: booking.booking_reference,
+      hotel,
       notes: {
         bookingId: booking.id,
         hotelId: hotel.id,
@@ -352,7 +397,7 @@ export async function createBookingHold({ hotel, user, payload }) {
     await db.query(
       `INSERT INTO payments (hotel_id, booking_id, provider_order_id, status, amount, currency, raw_payload)
        VALUES ($1,$2,$3,'created',$4,$5,$6)`,
-      [hotel.id, booking.id, order.id, paymentPlan.paidAmount, booking.currency, { ...order, paymentPlan }],
+      [hotel.id, booking.id, order.id, paymentPlan.paidAmount, booking.currency, { ...order, paymentPlan, paymentRouting: order.paymentRouting }],
     )
 
     return {
@@ -468,11 +513,26 @@ export async function confirmBookingPayment({ orderId, paymentId, signature, tru
     .then(async (pdf) => {
       const invoice = { ...result.invoice, pdf_url: pdf.publicUrl }
       await query('UPDATE invoices SET pdf_url = $1 WHERE id = $2', [pdf.publicUrl, result.invoice.id])
-      await sendBookingConfirmation({ hotel: result.hotel, room: result.room, booking: result.booking, invoice, pdfPath: pdf.filePath })
+      const hotelAdminEmails = await listHotelAdminEmails(result.hotel.id)
+      await sendBookingConfirmation({ hotel: result.hotel, room: result.room, booking: result.booking, invoice, pdfPath: pdf.filePath, hotelAdminEmails })
     })
     .catch((error) => console.error({ message: 'Receipt workflow failed', bookingId: result.booking.id, error: error.message }))
 
   return result.booking
+}
+
+async function listHotelAdminEmails(hotelId) {
+  const { rows } = await query(
+    `SELECT DISTINCT u.email
+     FROM hotel_admins ha
+     JOIN users u ON u.id = ha.user_id
+     WHERE ha.hotel_id = $1
+       AND u.role = 'hotel_admin'
+       AND u.disabled_at IS NULL
+       AND u.email IS NOT NULL`,
+    [hotelId],
+  )
+  return rows.map((row) => row.email).filter(Boolean)
 }
 
 export async function releaseExpiredBookingHolds(db) {

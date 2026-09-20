@@ -1,17 +1,20 @@
-import { Link, Navigate } from 'react-router-dom'
+import { Link, Navigate, useSearchParams } from 'react-router-dom'
 import {
   Accessibility,
   CalendarDays,
   CircleUserRound,
   Download,
+  Eye,
   Gift,
   Hotel,
   LogOut,
   Mail,
   MapPin,
   Phone,
+  ReceiptText,
   Save,
   Settings,
+  ShieldCheck,
   Sparkles,
   UserRound,
   X,
@@ -40,12 +43,16 @@ export function AccountPage() {
   const [profileForm, setProfileForm] = useState({ fullName: '', phone: '', avatar: 'avatar-male', photoUrl: '', gender: '', birthDate: '', city: '', address: '' })
   const [profileStatus, setProfileStatus] = useState({ loading: false, message: '', type: '' })
   const [showProfileModal, setShowProfileModal] = useState(false)
+  const [selectedBooking, setSelectedBooking] = useState(null)
+  const [bookingRefreshKey, setBookingRefreshKey] = useState(0)
+  const [searchParams, setSearchParams] = useSearchParams()
   const { data, loading, error } = useAsync(
     () => (isAuthenticated ? apiFetch('/me/bookings') : Promise.resolve({ bookings: [] })),
-    isAuthenticated ? `signed-in:${firebaseUser?.uid || 'unknown'}` : 'signed-out',
+    isAuthenticated ? `signed-in:${firebaseUser?.uid || 'unknown'}:${bookingRefreshKey}` : 'signed-out',
   )
 
   const bookings = useMemo(() => data?.bookings || [], [data?.bookings])
+  const requestedBookingReference = searchParams.get('booking')
   const bookingStats = useMemo(() => ({
     bookings: bookings.length,
     hotels: new Set(bookings.map((booking) => booking.hotel_name).filter(Boolean)).size,
@@ -67,6 +74,25 @@ export function AccountPage() {
     })
   }, [appUser.data?.user, firebaseUser?.displayName, firebaseUser?.photoURL])
 
+  useEffect(() => {
+    if (!requestedBookingReference || !bookings.length || selectedBooking) return
+    const booking = bookings.find((item) => item.booking_reference === requestedBookingReference)
+    if (booking) setSelectedBooking(booking)
+  }, [bookings, requestedBookingReference, selectedBooking])
+
+  useEffect(() => {
+    const waitingForReceipt = bookings.some((booking) => booking.status === 'confirmed' && !booking.pdf_url)
+    if (!waitingForReceipt) return undefined
+    const timer = window.setTimeout(() => setBookingRefreshKey((value) => value + 1), 5000)
+    return () => window.clearTimeout(timer)
+  }, [bookings])
+
+  useEffect(() => {
+    if (!selectedBooking) return
+    const latest = bookings.find((booking) => booking.booking_reference === selectedBooking.booking_reference)
+    if (latest && latest.pdf_url !== selectedBooking.pdf_url) setSelectedBooking(latest)
+  }, [bookings, selectedBooking])
+
   async function saveProfile(event) {
     event.preventDefault()
     setProfileStatus({ loading: true, message: '', type: '' })
@@ -78,7 +104,7 @@ export function AccountPage() {
     }
   }
 
-  if (authLoading || loading || appUser.loading) return <LoadingState label="Loading account" />
+  if (authLoading || (loading && !data) || appUser.loading) return <LoadingState label="Loading account" />
   if (!isAuthenticated) {
     return (
       <main className="container-page grid min-h-[70vh] place-items-center py-12">
@@ -100,12 +126,19 @@ export function AccountPage() {
   const redemptionProgress = redemptionMinPoints > 0 ? Math.min(100, Math.round((points / redemptionMinPoints) * 100)) : 100
   const pointsToUnlock = Math.max(0, redemptionMinPoints - points)
   const redemptionUnlocked = points >= redemptionMinPoints
+  const closeBookingDetails = () => {
+    setSelectedBooking(null)
+    if (requestedBookingReference) {
+      const nextParams = new URLSearchParams(searchParams)
+      nextParams.delete('booking')
+      setSearchParams(nextParams, { replace: true })
+    }
+  }
 
   return (
     <main className="overflow-hidden bg-ivory">
-      <section className="relative overflow-hidden bg-charcoal text-white">
-        <img src="https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1800&q=80" alt="" className="absolute inset-0 h-full w-full object-cover opacity-42" aria-hidden="true" />
-        <div className="absolute inset-0 bg-gradient-to-r from-black/88 via-black/58 to-black/20" />
+      <section className="relative overflow-hidden bg-stone-900 text-white">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.16),transparent_34%),linear-gradient(135deg,#111827,#1c1917_58%,#0c0a09)]" />
         <div className="container-page relative grid gap-8 py-12 md:py-16 lg:grid-cols-[1fr_360px] lg:items-end">
           <FadeIn viewport={false}>
             <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-amber-100">Guest account</p>
@@ -138,7 +171,7 @@ export function AccountPage() {
         <div className="grid gap-4 sm:grid-cols-3">
           <MetricCard icon={CalendarDays} label="Bookings" value={bookingStats.bookings} text="Across all hotels" />
           <MetricCard icon={Gift} label="Group points" value={points.toLocaleString('en-IN')} text={redemptionUnlocked ? 'Eligible to redeem at checkout' : `Unlocks at ${redemptionMinPoints.toLocaleString('en-IN')} points`} />
-          <MetricCard icon={Sparkles} label="Paid value" value={`Rs ${compactMoney(bookingStats.paid)}`} text="Confirmed payment value" />
+          <MetricCard icon={Sparkles} label="Paid value" value={rupees(bookingStats.paid)} text="Confirmed payment value" />
         </div>
 
         <FadeIn viewport={false} className="mt-5 rounded-lg border border-white/70 bg-white/80 p-4 shadow-glass backdrop-blur-xl">
@@ -169,20 +202,25 @@ export function AccountPage() {
           {bookings.length ? (
             <Stagger className="grid gap-4">
               {bookings.map((booking) => (
-                <StaggerItem key={booking.id} as="article" className="grid gap-4 overflow-hidden rounded-lg border border-stone-200 bg-white p-4 shadow-soft transition hover:-translate-y-1 hover:shadow-card lg:grid-cols-[minmax(0,1fr)_155px_120px_175px_140px] lg:items-center">
+                <StaggerItem key={booking.id} as="article" className="grid gap-4 overflow-hidden rounded-lg border border-stone-200 bg-white p-4 shadow-soft transition hover:-translate-y-1 hover:shadow-card lg:grid-cols-[minmax(0,1fr)_minmax(360px,460px)] lg:items-center">
                   <div className="min-w-0">
                     <p className="truncate text-2xl font-semibold">{booking.hotel_name}</p>
                     <p className="mt-1 truncate text-sm text-stone-500">{booking.room_type_name} / {booking.booking_reference}</p>
                     <p className="mt-2 text-xs font-bold uppercase tracking-[0.12em] text-stone-400">{booking.nights} night{Number(booking.nights) === 1 ? '' : 's'} / {booking.rooms_count} room{Number(booking.rooms_count) === 1 ? '' : 's'}</p>
                   </div>
-                  <p className="text-sm font-semibold text-stone-600">{formatDate(booking.check_in)}<br />{formatDate(booking.check_out)}</p>
-                  <StatusPill status={booking.status} />
-                  <div className="rounded-md bg-bone p-3 text-sm">
-                    <Line label="Total" value={money(booking.currency, booking.total_amount)} />
-                    <Line label="Paid" value={money(booking.currency, booking.metadata?.paymentPlan?.paidAmount ?? booking.total_amount)} />
-                    {Number(booking.metadata?.paymentPlan?.balanceDue || 0) > 0 ? <Line label="Due" value={money(booking.currency, booking.metadata.paymentPlan.balanceDue)} /> : null}
+                  <div className="grid gap-3 sm:grid-cols-[135px_110px_minmax(0,1fr)] sm:items-center">
+                    <p className="text-sm font-semibold leading-6 text-stone-600">{formatDate(booking.check_in)}<br />{formatDate(booking.check_out)}</p>
+                    <StatusPill status={booking.status} />
+                    <div className="rounded-md bg-bone p-3 text-sm">
+                      <Line label="Total" value={money(booking.currency, booking.total_amount)} />
+                      <Line label="Paid" value={money(booking.currency, booking.metadata?.paymentPlan?.paidAmount ?? booking.total_amount)} />
+                      {Number(booking.metadata?.paymentPlan?.balanceDue || 0) > 0 ? <Line label="Due" value={money(booking.currency, booking.metadata.paymentPlan.balanceDue)} /> : null}
+                    </div>
+                    <div className="grid gap-2 sm:col-span-3 sm:grid-cols-2">
+                      <button className="btn-primary !min-h-10 !px-3" type="button" onClick={() => setSelectedBooking(booking)}><Eye size={16} /> Open</button>
+                      {booking.pdf_url ? <a className="btn-secondary !min-h-10 !px-3" href={booking.pdf_url} download={receiptFileName(booking)}><Download size={16} /> Receipt</a> : <span className="inline-flex min-h-10 items-center justify-center rounded-md border border-stone-200 bg-stone-50 px-3 text-sm font-semibold text-stone-400">Preparing</span>}
+                    </div>
                   </div>
-                  {booking.pdf_url ? <a className="btn-secondary !min-h-10 !px-3" href={booking.pdf_url}><Download size={16} /> Receipt</a> : <span className="text-sm font-semibold text-stone-400">Receipt preparing</span>}
                 </StaggerItem>
               ))}
             </Stagger>
@@ -207,6 +245,7 @@ export function AccountPage() {
           onClose={() => setShowProfileModal(false)}
         />
       ) : null}
+      {selectedBooking ? <BookingDetailsModal booking={selectedBooking} onClose={closeBookingDetails} /> : null}
     </main>
   )
 }
@@ -264,6 +303,95 @@ function ProfileModal({ form, setForm, email, status, saving, onSave, onClose })
   )
 }
 
+function BookingDetailsModal({ booking, onClose }) {
+  const metadata = booking.metadata || {}
+  const pricing = metadata.pricing || {}
+  const paymentPlan = metadata.paymentPlan || {}
+  const selectedAmenities = Array.isArray(metadata.selectedAmenities) ? metadata.selectedAmenities : []
+  const taxAmount = Number(booking.tax_amount || 0)
+  const taxHalf = taxAmount / 2
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-end bg-charcoal/55 p-3 backdrop-blur-sm md:place-items-center" onMouseDown={onClose}>
+      <div className="max-h-[94vh] w-full max-w-6xl overflow-y-auto rounded-lg border border-white/60 bg-ivory shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="sticky top-0 z-10 flex flex-col justify-between gap-3 border-b border-mist bg-stone-900 p-4 text-white sm:flex-row sm:items-center sm:p-5">
+          <div className="min-w-0">
+            <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-amber-100">Booking details</p>
+            <h2 className="mt-1 truncate text-2xl font-black sm:text-3xl">{booking.hotel_name}</h2>
+            <p className="mt-1 text-sm font-semibold text-white/65">{booking.booking_reference} / {booking.room_type_name}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {booking.pdf_url ? <a className="btn-primary !min-h-10 !px-3" href={booking.pdf_url} download={receiptFileName(booking)}><Download size={16} /> Download receipt</a> : <span className="inline-flex min-h-10 items-center rounded-md border border-white/20 px-3 text-sm font-bold text-white/55">Receipt preparing</span>}
+            <button type="button" className="grid h-10 w-10 place-items-center rounded-md border border-white/20 bg-white/10" onClick={onClose} aria-label="Close booking details"><X size={18} /></button>
+          </div>
+        </div>
+
+        <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <section className="grid gap-4">
+            <div className="grid gap-3 rounded-lg border border-mist bg-white p-4 shadow-soft sm:grid-cols-4">
+              <Info icon={ReceiptText} label="Reference" value={booking.booking_reference} />
+              <Info icon={CalendarDays} label="Dates" value={`${formatDate(booking.check_in)} to ${formatDate(booking.check_out)}`} />
+              <Info icon={Hotel} label="Rooms" value={`${booking.rooms_count} room${Number(booking.rooms_count) === 1 ? '' : 's'}`} />
+              <Info icon={ShieldCheck} label="Status" value={booking.status || 'confirmed'} />
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <DetailBlock title="Guest">
+                <DetailLine label="Name" value={booking.guest_name} />
+                <DetailLine label="Email" value={booking.guest_email} />
+                <DetailLine label="Phone" value={booking.guest_phone || '-'} />
+                <DetailLine label="Guests" value={`${booking.adults} adult${Number(booking.adults) === 1 ? '' : 's'}, ${booking.children || 0} child${Number(booking.children) === 1 ? '' : 'ren'}`} />
+              </DetailBlock>
+              <DetailBlock title="Room">
+                <DetailLine label="Room type" value={booking.room_type_name} />
+                <DetailLine label="Bed type" value={booking.bed_type || 'Premium bedding'} />
+                <DetailLine label="Size" value={booking.size_sqft ? `${booking.size_sqft} sq ft` : '-'} />
+                <DetailLine label="Stay" value={`${booking.nights} night${Number(booking.nights) === 1 ? '' : 's'}`} />
+              </DetailBlock>
+            </div>
+
+            {booking.room_description ? (
+              <DetailBlock title="Room description">
+                <p className="text-sm font-semibold leading-7 text-stone-600">{booking.room_description}</p>
+              </DetailBlock>
+            ) : null}
+
+            <DetailBlock title="Selected add-ons">
+              {selectedAmenities.length ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {selectedAmenities.map((amenity) => (
+                    <div key={amenity.id || amenity.name} className="rounded-md border border-mist bg-ivory p-3">
+                      <p className="font-extrabold text-charcoal">{amenity.name}</p>
+                      <p className="mt-1 text-sm font-semibold text-stone-500">{money(booking.currency, Number(amenity.price || 0) * Number(booking.rooms_count || 1))}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-sm font-semibold text-stone-500">No paid add-ons were selected for this booking.</p>}
+            </DetailBlock>
+          </section>
+
+          <aside className="rounded-lg border border-mist bg-white p-4 shadow-soft lg:sticky lg:top-24 lg:self-start">
+            <p className="eyebrow">Billing summary</p>
+            <h3 className="mt-2 text-2xl font-black text-charcoal">{money(booking.currency, booking.total_amount)}</h3>
+            <div className="mt-5 grid gap-3 text-sm">
+              <DetailLine label="Room subtotal" value={money(booking.currency, pricing.roomSubtotal || booking.subtotal_amount)} />
+              {selectedAmenities.length ? <DetailLine label="Selected add-ons" value={money(booking.currency, pricing.amenitySubtotal || 0)} /> : null}
+              {metadata.offer?.discountAmount ? <DetailLine label={`Offer: ${metadata.offer.title || 'Discount'}`} value={`-${money(booking.currency, metadata.offer.discountAmount)}`} /> : null}
+              {metadata.loyaltyRedemption?.amount ? <DetailLine label="Loyalty redemption" value={`-${money(booking.currency, metadata.loyaltyRedemption.amount)}`} /> : null}
+              <DetailLine label="Taxable subtotal" value={money(booking.currency, booking.subtotal_amount)} />
+              <DetailLine label="CGST (2.5%)" value={money(booking.currency, taxHalf)} />
+              <DetailLine label="IGST (2.5%)" value={money(booking.currency, taxHalf)} />
+              <div className="border-t border-mist pt-3">
+                <DetailLine label="Paid now" value={money(booking.currency, paymentPlan.paidAmount ?? booking.total_amount)} strong />
+                <DetailLine label="Balance due" value={money(booking.currency, paymentPlan.balanceDue || 0)} />
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Avatar({ id, gender, photoUrl, large }) {
   const size = large ? 'h-20 w-20' : 'h-14 w-14'
   if (photoUrl) return <img src={photoUrl} alt="" className={`${size} shrink-0 rounded-full border border-white bg-white object-cover shadow-soft`} />
@@ -286,6 +414,24 @@ function Field({ label, children }) {
 
 function Line({ label, value }) {
   return <p className="flex justify-between gap-3"><span className="text-stone-500">{label}</span><span className="font-extrabold text-charcoal">{value}</span></p>
+}
+
+function DetailBlock({ title, children }) {
+  return (
+    <section className="rounded-lg border border-mist bg-white p-4 shadow-soft">
+      <h3 className="text-lg font-black text-charcoal">{title}</h3>
+      <div className="mt-3 grid gap-2">{children}</div>
+    </section>
+  )
+}
+
+function DetailLine({ label, value, strong = false }) {
+  return (
+    <p className="flex items-start justify-between gap-4 text-sm">
+      <span className="font-semibold text-stone-500">{label}</span>
+      <span className={`max-w-[62%] break-words text-right ${strong ? 'text-base font-black text-charcoal' : 'font-extrabold text-charcoal'}`}>{value || '-'}</span>
+    </p>
+  )
 }
 
 function HeroStat({ icon: Icon, label, value }) {
@@ -323,12 +469,12 @@ function money(currency, value) {
   return `${currency || 'INR'} ${Number(value || 0).toLocaleString('en-IN')}`
 }
 
-function compactMoney(value) {
-  const amount = Number(value || 0)
-  if (Math.abs(amount) >= 10000000) return `${(amount / 10000000).toFixed(1)}Cr`
-  if (Math.abs(amount) >= 100000) return `${(amount / 100000).toFixed(1)}L`
-  if (Math.abs(amount) >= 1000) return `${(amount / 1000).toFixed(1)}k`
-  return amount.toLocaleString('en-IN')
+function rupees(value) {
+  return `Rs ${Number(value || 0).toLocaleString('en-IN')}`
+}
+
+function receiptFileName(booking) {
+  return `${booking.invoice_number || `INV-${booking.booking_reference}`}.pdf`
 }
 
 function formatDate(value) {

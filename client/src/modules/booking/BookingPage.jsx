@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Bath, BedDouble, CalendarCheck, Check, ChevronRight, CreditCard, Gift, Loader2, Maximize2, Minus, Plus, ShieldCheck, UsersRound } from 'lucide-react'
+import { Bath, BedDouble, CalendarCheck, Check, ChevronRight, CreditCard, Dumbbell, Gift, Loader2, Maximize2, Minus, Plus, ShieldCheck, Sparkles, Utensils, Waves, Wifi, UsersRound } from 'lucide-react'
 import { FadeIn, Stagger, StaggerItem } from '../../components/ui/Motion.jsx'
 import { AutoScrollRow } from '../../components/ui/AutoScrollRow.jsx'
 import { LoadingState } from '../../components/ui/LoadingState.jsx'
@@ -14,10 +14,20 @@ import { apiFetch } from '../../services/apiClient.js'
 import { buildTenantPath, getSavedTenantKey, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
 
 const fallbackRoomImage = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1400&q=80'
-const PARTIAL_PAYMENT_PERCENT = 50
+const PARTIAL_PAYMENT_PERCENT = 25
 const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
+const FIXED_TAX_RATE = 5
+const TERMS_VERSION = '2026-09-20'
 const bookingAuthDraftKey = 'rs-exclusive-booking-auth-return'
 const bookingAuthDraftMaxAgeMs = 60 * 60 * 1000
+const termsAndConditions = [
+  'The primary guest must be at least 18 years of age to check in.',
+  'Every guest above 18 must carry an original valid photo ID at check-in.',
+  'Guests are responsible for damage beyond normal wear and tear.',
+  'Booking-specific policies may apply and will be confirmed by the hotel.',
+  'The hotel may contact guests before arrival to confirm check-in details.',
+  'Guest information may be used for reservations, guest service, marketing, analytics, and record keeping by the hotel group.',
+]
 
 function defaultDates() {
   const start = new Date()
@@ -67,7 +77,7 @@ export function BookingPage() {
     checkIn: queryValue(params, 'checkIn', defaultCheckIn),
     checkOut: queryValue(params, 'checkOut', defaultCheckOut),
     roomsCount: Number(queryValue(params, 'roomsCount', '1')),
-    adults: Number(queryValue(params, 'adults', '2')),
+    adults: Number(queryValue(params, 'adults', '1')),
     children: Number(queryValue(params, 'children', '0')),
     guestName: '',
     guestEmail: '',
@@ -79,6 +89,7 @@ export function BookingPage() {
   const [selectedAmenityIds, setSelectedAmenityIds] = useState(() => queryList(params, 'amenities'))
   const [redeemPoints, setRedeemPoints] = useState(Math.max(0, Number(queryValue(params, 'redeemPoints', '0'))))
   const [paymentMode, setPaymentMode] = useState(params.get('paymentMode') === 'partial' ? 'partial' : 'full')
+  const [termsAccepted, setTermsAccepted] = useState(false)
   const [searched, setSearched] = useState(false)
   const [status, setStatus] = useState({ loading: false, error: '', paymentError: '' })
   const [guideToast, setGuideToast] = useState(null)
@@ -101,7 +112,10 @@ export function BookingPage() {
     () => offers.find((offer) => offer.id === selectedOfferId) || null,
     [offers, selectedOfferId],
   )
-  const roomsForDisplay = searched ? availableRooms : allRooms
+  const roomsForDisplay = useMemo(
+    () => (searched ? availableRooms : allRooms.filter((room) => roomSupportsGuestIntent(room, form.adults, form.children))),
+    [allRooms, availableRooms, form.adults, form.children, searched],
+  )
   const hasInitialSearchParams = Boolean(params.get('checkIn') && params.get('checkOut'))
   const selectedRoom = useMemo(
     () => roomsForDisplay.find((room) => room.id === selectedRoomId) || null,
@@ -128,7 +142,7 @@ export function BookingPage() {
   const appliedRedeemPoints = Math.min(Math.max(0, Number(redeemPoints || 0)), maxRedeemablePoints)
   const loyaltyDiscount = roundMoney(appliedRedeemPoints * 100)
   const subtotal = Math.max(0, roundMoney(subtotalBeforeRedemption - loyaltyDiscount))
-  const tax = data?.hotel ? roundMoney((subtotal * Number(data.hotel.tax_rate || 0)) / 100) : 0
+  const tax = roundMoney((subtotal * FIXED_TAX_RATE) / 100)
   const total = roundMoney(subtotal + tax)
   const paymentDue = paymentMode === 'partial' ? roundMoney(total * (PARTIAL_PAYMENT_PERCENT / 100)) : total
   const balanceDue = roundMoney(total - paymentDue)
@@ -200,10 +214,11 @@ export function BookingPage() {
   }, [authLoading, isAuthenticated, params])
 
   useEffect(() => {
-    if (!selectedRoomId && allRooms[0]) {
-      setSelectedRoomId(allRooms[0].id)
+    if (!roomsForDisplay.length) return
+    if (!selectedRoomId || !roomsForDisplay.some((room) => room.id === selectedRoomId)) {
+      setSelectedRoomId(roomsForDisplay[0].id)
     }
-  }, [allRooms, selectedRoomId])
+  }, [roomsForDisplay, selectedRoomId])
 
   useEffect(() => {
     if (!data) return
@@ -222,7 +237,7 @@ export function BookingPage() {
 
   useEffect(() => {
     if (!priceRoom || !selectedAmenityIds.length) return
-    const validIds = new Set(getBookableAmenityItems(priceRoom, bookableAmenities).map((amenity) => amenity.id).filter(Boolean))
+    const validIds = new Set(getAddOnAmenityItems(priceRoom, bookableAmenities).map((amenity) => amenity.id).filter(Boolean))
     const nextSelected = selectedAmenityIds.filter((id) => validIds.has(id))
     if (nextSelected.length !== selectedAmenityIds.length) setSelectedAmenityIds(nextSelected)
   }, [priceRoom, bookableAmenities, selectedAmenityIds])
@@ -270,7 +285,7 @@ export function BookingPage() {
   }
 
   function updateCheckIn(checkIn) {
-    const checkOut = getStayDateError(checkIn, form.checkOut) ? addDays(checkIn, 1) : form.checkOut
+    const checkOut = getStayDateError(checkIn, form.checkOut) ? '' : form.checkOut
     updateStayForm({ ...form, checkIn, checkOut })
   }
 
@@ -280,6 +295,14 @@ export function BookingPage() {
 
   function updateDateRange(checkIn, checkOut) {
     updateStayForm({ ...form, checkIn, checkOut })
+  }
+
+  async function completeDateRange(checkIn, checkOut) {
+    const nextForm = { ...form, checkIn, checkOut }
+    const dateError = getStayDateError(checkIn, checkOut)
+    if (dateError) return
+    const availability = await loadAvailability({ form: nextForm, silent: true })
+    if (availability) scrollToRooms()
   }
 
   function chooseOffer(offerId) {
@@ -311,20 +334,21 @@ export function BookingPage() {
   async function loadAvailability(options = {}) {
     const preferredRoomId = options.preferredRoomId ?? selectedRoomId
     const preservedStep = ['details', 'review'].includes(options.step) ? options.step : ['details', 'review'].includes(step) ? step : undefined
-    const dateError = getStayDateError(form.checkIn, form.checkOut)
+    const searchForm = options.form || form
+    const dateError = getStayDateError(searchForm.checkIn, searchForm.checkOut)
     if (dateError) {
       setStatus({ loading: false, error: dateError, paymentError: '' })
       return null
     }
     setStatus({ loading: true, error: '', paymentError: '' })
-    syncUrl(form, preferredRoomId, { step: preservedStep })
+    syncUrl(searchForm, preferredRoomId, { step: preservedStep })
     try {
       const search = new URLSearchParams({
-        checkIn: form.checkIn,
-        checkOut: form.checkOut,
-        roomsCount: String(form.roomsCount),
-        adults: String(form.adults),
-        children: String(form.children),
+        checkIn: searchForm.checkIn,
+        checkOut: searchForm.checkOut,
+        roomsCount: String(searchForm.roomsCount),
+        adults: String(searchForm.adults),
+        children: String(searchForm.children),
       })
       const payload = await apiFetch(`/availability?${search.toString()}`)
       setAvailableRooms(payload.rooms)
@@ -332,8 +356,10 @@ export function BookingPage() {
       const selectedStillAvailable = payload.rooms.some((room) => room.id === preferredRoomId)
       const firstRoom = payload.rooms[0]
       const nextRoomId = selectedStillAvailable ? preferredRoomId : firstRoom?.id || ''
+      const nextAmenityIds = withRequiredExtraBedAmenity(selectedAmenityIds, payload.rooms, bookableAmenities, nextRoomId)
+      if (nextAmenityIds.length !== selectedAmenityIds.length) setSelectedAmenityIds(nextAmenityIds)
       setSelectedRoomId(nextRoomId)
-      syncUrl(form, nextRoomId, { step: preservedStep })
+      syncUrl(searchForm, nextRoomId, { step: preservedStep, amenityIds: nextAmenityIds })
       setStatus({ loading: false, error: payload.rooms.length || options.silent ? '' : 'No rooms are available for those dates. Try another date range.', paymentError: '' })
       return { rooms: payload.rooms, nextRoomId }
     } catch (err) {
@@ -346,6 +372,7 @@ export function BookingPage() {
     event?.preventDefault()
     if (stayDateError) {
       showGuideToast('Check your stay dates', stayDateError)
+      return
     }
     const availability = await loadAvailability()
     if (availability) scrollToRooms()
@@ -466,6 +493,11 @@ export function BookingPage() {
       showGuideToast('Add phone number', 'Please enter a valid phone number before booking this room.')
       return
     }
+    if (!termsAccepted) {
+      setStatus({ loading: false, error: '', paymentError: 'Accept the booking terms and conditions to continue.' })
+      showGuideToast('Terms required', 'Please accept the booking terms before secure payment.')
+      return
+    }
 
     setStatus({ loading: true, error: '', paymentError: '' })
     try {
@@ -485,6 +517,8 @@ export function BookingPage() {
           selectedAmenityIds,
           redeemPoints: appliedRedeemPoints,
           paymentMode,
+          termsAccepted,
+          termsVersion: TERMS_VERSION,
         },
       })
 
@@ -497,7 +531,7 @@ export function BookingPage() {
             razorpaySignature: `dev_signature_${hold.booking.booking_reference}`,
           },
         })
-        navigate(buildTenantPath(`/confirmation/${confirmed.booking.booking_reference}`, resolveTenantFromLocation()), { state: { booking: confirmed.booking } })
+        navigate(buildTenantPath(`/account?booking=${encodeURIComponent(confirmed.booking.booking_reference)}`, resolveTenantFromLocation()), { state: { booking: confirmed.booking } })
         return
       }
 
@@ -542,7 +576,7 @@ export function BookingPage() {
                 razorpaySignature: response.razorpay_signature,
               },
             })
-            navigate(buildTenantPath(`/confirmation/${confirmed.booking.booking_reference}`, resolveTenantFromLocation()), { state: { booking: confirmed.booking } })
+            navigate(buildTenantPath(`/account?booking=${encodeURIComponent(confirmed.booking.booking_reference)}`, resolveTenantFromLocation()), { state: { booking: confirmed.booking } })
           } catch (err) {
             setStatus({ loading: false, error: '', paymentError: err.message })
           }
@@ -585,7 +619,7 @@ export function BookingPage() {
   }
 
   if (step === 'details' && detailRoom) {
-    return <RoomDetails room={detailRoom} hotel={data.hotel} form={form} nights={nights} amenities={bookableAmenities} offers={offers} selectedOfferId={selectedOfferId} selectedAmenityIds={selectedAmenityIds} selectedOffer={selectedOffer} offerDiscount={offerDiscount} onSelectOffer={chooseOffer} onToggleAmenity={toggleAmenity} onBook={() => selectRoom(detailRoom)} onClose={backToRooms} />
+    return <RoomDetails room={getDisplayRoomForGuests(detailRoom, form.adults)} hotel={data.hotel} form={form} nights={nights} amenities={bookableAmenities} offers={offers} selectedOfferId={selectedOfferId} selectedAmenityIds={selectedAmenityIds} selectedOffer={selectedOffer} offerDiscount={offerDiscount} onSelectOffer={chooseOffer} onToggleAmenity={toggleAmenity} onBook={() => selectRoom(detailRoom)} onClose={backToRooms} />
   }
 
   if (step === 'review') {
@@ -630,6 +664,8 @@ export function BookingPage() {
         onGuide={showGuideToast}
         onPaymentMode={choosePaymentMode}
         onPay={proceedToPayment}
+        termsAccepted={termsAccepted}
+        setTermsAccepted={setTermsAccepted}
       />
     )
   }
@@ -654,9 +690,9 @@ export function BookingPage() {
       <section className="container-page -mt-8 pb-16 md:pb-24">
         <FadeIn viewport={false} className="relative z-20">
           <form onSubmit={searchRooms} className="glass-panel grid grid-cols-2 gap-3 p-4 lg:grid-cols-[1fr_1fr_0.8fr_0.8fr_0.8fr_auto] lg:items-end">
-            <StayDateRangePicker className="col-span-2 lg:col-span-2" checkIn={form.checkIn} checkOut={form.checkOut} onCheckInChange={updateCheckIn} onCheckOutChange={updateCheckOut} onRangeChange={updateDateRange} />
+            <StayDateRangePicker className="col-span-2 lg:col-span-2" checkIn={form.checkIn} checkOut={form.checkOut} onCheckInChange={updateCheckIn} onCheckOutChange={updateCheckOut} onRangeChange={updateDateRange} onRangeComplete={completeDateRange} />
             <Field label="Adults"><Stepper value={form.adults} min={1} onChange={(value) => updateStayForm({ ...form, adults: value })} /></Field>
-            <Field label="Children"><Stepper value={form.children} min={0} onChange={(value) => updateStayForm({ ...form, children: value })} /></Field>
+            <Field label="Children (1-7 yrs)"><Stepper value={form.children} min={0} onChange={(value) => updateStayForm({ ...form, children: value })} /></Field>
             <Field label="Rooms" className="col-span-2 sm:col-span-1"><Stepper value={form.roomsCount} min={1} onChange={(value) => updateStayForm({ ...form, roomsCount: value })} /></Field>
             <button className="btn-primary col-span-2 h-12 w-full px-5 sm:col-span-1 lg:col-span-1" type="submit" disabled={status.loading}>
               {status.loading ? <Loader2 size={18} className="animate-spin" /> : <CalendarCheck size={18} />} Search Rooms
@@ -664,7 +700,7 @@ export function BookingPage() {
           </form>
         </FadeIn>
 
-        {(status.error || stayDateError) ? <p className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{status.error || stayDateError}</p> : null}
+        {(status.error || (stayDateError && form.checkIn && form.checkOut)) ? <p className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{status.error || stayDateError}</p> : null}
 
         {offers.length ? <BookingOfferBand offers={offers} selectedOfferId={selectedOfferId} onSelectOffer={chooseOffer} /> : null}
 
@@ -679,10 +715,10 @@ export function BookingPage() {
               </div>
             </div>
 
-            {(searched ? availableRooms : allRooms).length ? (
+            {roomsForDisplay.length ? (
               <Stagger className="grid gap-4">
-                {(searched ? availableRooms : allRooms).map((room) => (
-                  <RoomCard key={room.id} room={room} searched={searched} selected={room.id === selectedRoomId} loading={status.loading} offers={offers} selectedOfferId={selectedOfferId} offer={selectedOffer} nights={nights} roomsCount={form.roomsCount} onSelectOffer={chooseOffer} onDetails={() => openDetails(room)} onBook={() => selectRoom(room)} />
+                {roomsForDisplay.map((room) => (
+                  <RoomCard key={room.id} room={room} adults={form.adults} searched={searched} selected={room.id === selectedRoomId} loading={status.loading} offers={offers} selectedOfferId={selectedOfferId} offer={selectedOffer} nights={nights} roomsCount={form.roomsCount} onSelectOffer={chooseOffer} onDetails={() => openDetails(room)} onBook={() => selectRoom(room)} />
                 ))}
               </Stagger>
             ) : (
@@ -808,33 +844,35 @@ function OfferChoiceCard({ offer, selected, onSelect, compact = false }) {
   )
 }
 
-function RoomCard({ room, searched, selected, loading, offers, selectedOfferId, offer, nights, roomsCount, onSelectOffer, onDetails, onBook }) {
+function RoomCard({ room, adults, searched, selected, loading, offers, selectedOfferId, offer, nights, roomsCount, onSelectOffer, onDetails, onBook }) {
+  const displayRoom = getDisplayRoomForGuests(room, adults)
   const unavailable = searched && Number(room.available_rooms || 0) < 1
-  const displayPrice = room.offer_price || room.base_price
-  const staySubtotal = Number(room.subtotal || Number(displayPrice || 0) * Math.max(nights, 1)) * Number(roomsCount || 1)
+  const extraBedCount = Number(displayRoom.extra_bed_count || 0)
+  const displayPrice = displayRoom.offer_price || displayRoom.base_price
+  const staySubtotal = Number(displayRoom.subtotal || Number(displayPrice || 0) * Math.max(nights, 1)) * Number(roomsCount || 1)
   const cardDiscount = calculateOfferDiscount(offer, staySubtotal)
   const discountedStayTotal = Math.max(0, roundMoney(staySubtotal - cardDiscount))
-  const roomPriceSaving = room.offer_price ? Math.max(0, Number(room.base_price || 0) - Number(room.offer_price || 0)) : 0
+  const roomPriceSaving = displayRoom.offer_price ? Math.max(0, Number(displayRoom.base_price || 0) - Number(displayRoom.offer_price || 0)) : 0
   const possibleLoyaltyPoints = Math.max(0, Math.floor(discountedStayTotal / 100))
   const stayNights = Math.max(nights, 1)
   const roomUnits = Number(roomsCount || 1)
   const bestNightPrice = roundMoney((offer ? discountedStayTotal : staySubtotal) / stayNights / roomUnits)
-  const compareNightPrice = room.offer_price ? Number(room.base_price || 0) : Number(displayPrice || 0)
+  const compareNightPrice = displayRoom.offer_price ? Number(displayRoom.base_price || 0) : Number(displayPrice || 0)
   const offerNightSaving = offer ? Math.max(0, roundMoney(Number(displayPrice || 0) - bestNightPrice)) : 0
   const offerVisual = offer ? getOfferVisual(offer) : null
   return (
     <StaggerItem as="article" className={`group grid overflow-visible rounded-lg border bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:shadow-card md:grid-cols-[240px_minmax(0,1fr)_225px] lg:grid-cols-[280px_minmax(0,1fr)_235px] ${selected ? 'border-amberline ring-2 ring-amberline/25' : 'border-white/80'}`}>
       <div className="image-lift h-52 rounded-none md:h-full md:min-h-[15.5rem]">
-        <RotatingRoomImage room={room} className="h-full w-full object-cover" />
+        <RotatingRoomImage room={displayRoom} className="h-full w-full object-cover" />
       </div>
       <div className="flex min-w-0 flex-col gap-3 p-4 md:p-5">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.12em] text-stone-500">{room.bed_type || 'Premium room'}</p>
-          <h3 className="mt-2 text-2xl font-bold leading-tight">{room.name}</h3>
-          <p className="mt-2 line-clamp-2 text-sm leading-6 text-stone-600">{room.description}</p>
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-stone-500">{displayRoom.bed_type || 'Premium room'}</p>
+          <h3 className="mt-2 text-2xl font-bold leading-tight">{displayRoom.name}</h3>
+          <p className="mt-2 line-clamp-2 text-sm leading-6 text-stone-600">{displayRoom.description}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {(room.amenities || []).slice(0, 3).map((amenity) => <span key={amenity} className="rounded-md bg-stone-100 px-3 py-2 text-xs font-bold text-stone-600">{amenity}</span>)}
+          {(displayRoom.amenities || []).slice(0, 3).map((amenity) => <span key={amenity} className="rounded-md bg-stone-100 px-3 py-2 text-xs font-bold text-stone-600">{amenity}</span>)}
         </div>
         <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1.5fr)_minmax(190px,0.8fr)]">
           {offers.length ? (
@@ -847,9 +885,14 @@ function RoomCard({ room, searched, selected, loading, offers, selectedOfferId, 
           </div>
         </div>
         <div className="mt-auto flex flex-wrap gap-4 border-t border-mist pt-3 text-sm font-semibold text-stone-600">
-          <span className="flex items-center gap-1"><UsersRound size={16} /> {room.occupancy_adults} adults, {room.occupancy_children} children</span>
-          <span className="flex items-center gap-1"><BedDouble size={16} /> {searched ? `${room.available_rooms} available` : 'Search dates'}</span>
+          <span className="flex items-center gap-1"><UsersRound size={16} /> {displayRoom.occupancy_adults} adults, {displayRoom.occupancy_children} children</span>
+          <span className="flex items-center gap-1"><BedDouble size={16} /> {searched ? `${displayRoom.available_rooms} available` : 'Search dates'}</span>
         </div>
+        {extraBedCount ? (
+          <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-extrabold leading-5 text-amber-950">
+            Extra bed will be added for {extraBedCount} extra adult{extraBedCount === 1 ? '' : 's'}.
+          </p>
+        ) : null}
       </div>
       <div className="flex flex-col justify-between border-t border-emerald-200 bg-[linear-gradient(180deg,#ecfdf5_0%,#ffffff_100%)] p-4 md:border-l md:border-t-0">
         <div>
@@ -1030,9 +1073,13 @@ function BookingReviewPage({
   onGuide,
   onPaymentMode,
   onPay,
+  termsAccepted,
+  setTermsAccepted,
 }) {
-  const roomAmenities = getBookableAmenityItems(priceRoom, data.amenities || [])
+  const roomAmenities = getAddOnAmenityItems(priceRoom, data.amenities || [])
   const [breakdownOpen, setBreakdownOpen] = useState(false)
+  const [termsOpen, setTermsOpen] = useState(false)
+  const tenantMode = resolveTenantFromLocation()
   const selectedOfferVisual = selectedOffer ? getOfferVisual(selectedOffer) : null
   return (
     <main className="bg-ivory">
@@ -1061,6 +1108,11 @@ function BookingReviewPage({
                 <Detail icon={BedDouble} label="Bed" value={priceRoom?.bed_type || 'Premium bedding'} />
                 <Detail icon={Bath} label="Size" value={priceRoom?.size_sqft ? `${priceRoom.size_sqft} sq ft` : 'Spacious'} />
               </div>
+              {Number(priceRoom?.extra_bed_count || 0) ? (
+                <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-extrabold leading-6 text-amber-950">
+                  Extra bed added for {Number(priceRoom.extra_bed_count)} extra adult{Number(priceRoom.extra_bed_count) === 1 ? '' : 's'}.
+                </p>
+              ) : null}
               {roomAmenities.length ? (
                 <div className="mt-7">
                   <div className="flex flex-col justify-between gap-2 md:flex-row md:items-end">
@@ -1128,7 +1180,7 @@ function BookingReviewPage({
                   {selectedOffer ? <Line label={selectedOffer.title} value={`- Rs ${offerDiscount.toLocaleString('en-IN')}`} /> : null}
                   {redeemPoints ? <Line label={`${redeemPoints} group loyalty point${redeemPoints === 1 ? '' : 's'}`} value={`- Rs ${loyaltyDiscount.toLocaleString('en-IN')}`} /> : null}
                   <Line label="Taxable subtotal" value={`Rs ${subtotal.toLocaleString('en-IN')}`} />
-                  <Line label="Taxes" value={`Rs ${tax.toLocaleString('en-IN')}`} />
+                  <Line label={`Taxes (${FIXED_TAX_RATE}%)`} value={`Rs ${tax.toLocaleString('en-IN')}`} />
                 </div>
               ) : null}
               {selectedOffer ? (
@@ -1192,6 +1244,32 @@ function BookingReviewPage({
               ) : (
                 <p className="mt-5 rounded-md bg-ivory p-3 text-sm font-semibold text-stone-600">Sign in or create a guest account to continue. Your selected room and dates will stay here.</p>
               )}
+
+              {isAuthenticated ? (
+                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/80 p-3">
+                  <label className="flex items-start gap-3 text-sm font-semibold leading-6 text-stone-700">
+                    <input className="mt-1 h-4 w-4 accent-[#7f1d1d]" type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} />
+                    <span>I agree to the hotel booking terms, guest policies, and data consent terms.</span>
+                  </label>
+                  <div className="mt-2 flex flex-wrap gap-3">
+                    <Link to={buildTenantPath('/terms', tenantMode)} className="text-sm font-black text-[#7f1d1d] underline-offset-4 hover:underline">
+                      Open terms and conditions
+                    </Link>
+                    <button type="button" className="text-sm font-black text-stone-600 underline-offset-4 hover:text-charcoal hover:underline" onClick={() => setTermsOpen((current) => !current)}>
+                      {termsOpen ? 'Hide quick summary' : 'Quick summary'}
+                    </button>
+                  </div>
+                  {termsOpen ? (
+                    <ol className="mt-3 max-h-44 space-y-2 overflow-y-auto rounded-md border border-amber-200 bg-white p-3 text-xs font-semibold leading-5 text-stone-600">
+                      {termsAndConditions.map((term, index) => (
+                        <li key={`${index}-${term.slice(0, 14)}`}>
+                          <span className="font-black text-charcoal">{index + 1}. </span>{term}
+                        </li>
+                      ))}
+                    </ol>
+                  ) : null}
+                </div>
+              ) : null}
 
               {(status.paymentError || status.error || stayDateError) ? <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{status.paymentError || status.error || stayDateError}</p> : null}
               <button
@@ -1303,30 +1381,67 @@ function LoyaltyRedeemControl({ availablePoints, maxRedeemablePoints, redeemPoin
 
 function AmenityOption({ amenity, selected, onToggle }) {
   const disabled = !amenity.id
+  const [open, setOpen] = useState(false)
+  const hasDescription = Boolean(String(amenity.description || '').trim())
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      disabled={disabled}
-      className={`flex min-h-28 items-start gap-3 rounded-lg border p-4 text-left transition duration-300 hover:-translate-y-0.5 hover:shadow-card disabled:cursor-not-allowed disabled:opacity-70 ${selected ? 'border-amberline bg-amber-50 ring-2 ring-amberline/15' : 'border-mist bg-white'}`}
-    >
-      <span className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md border ${selected ? 'border-amberline bg-amberline text-white' : 'border-stone-300 bg-white text-transparent'}`}>
-        <Check size={15} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-start justify-between gap-3">
-          <span className="font-extrabold text-charcoal">{amenity.name}</span>
-          <span className="shrink-0 text-sm font-black text-amberline">{Number(amenity.price || 0) ? `Rs ${Number(amenity.price).toLocaleString('en-IN')}` : 'Included'}</span>
+    <div className={`rounded-lg border p-3 transition duration-300 hover:-translate-y-0.5 hover:shadow-card ${selected ? 'border-amberline bg-amber-50 ring-2 ring-amberline/15' : 'border-mist bg-white'} ${disabled ? 'opacity-70' : ''}`}>
+      <div className="flex items-start gap-3">
+        <button
+          type="button"
+          onClick={onToggle}
+          disabled={disabled}
+          className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md border ${selected ? 'border-amberline bg-amberline text-white' : 'border-stone-300 bg-white text-stone-300'} disabled:cursor-not-allowed`}
+          aria-label={selected ? `Remove ${amenity.name}` : `Select ${amenity.name}`}
+        >
+          <Check size={16} />
+        </button>
+        <div className="grid h-9 w-9 shrink-0 place-items-center text-amberline">
+          <AmenityVisual amenity={amenity} className="h-8 w-8" iconSize={22} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <p className="break-words text-sm font-extrabold text-charcoal">{amenity.name}</p>
+            <span className="shrink-0 rounded-md bg-bone px-2 py-1 text-xs font-black text-amberline">{Number(amenity.price || 0) ? `Rs ${Number(amenity.price).toLocaleString('en-IN')}` : 'Included'}</span>
+          </div>
+          {hasDescription ? (
+            <button type="button" className="mt-1 text-xs font-black text-[#7f1d1d] underline-offset-4 hover:underline" onClick={() => setOpen((current) => !current)}>
+              {open ? 'Show less' : 'Read more'}
+            </button>
+          ) : null}
+          {open && hasDescription ? <p className="mt-2 text-sm font-medium leading-6 text-stone-600">{amenity.description}</p> : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AmenityInfoCard({ amenity }) {
+  const [open, setOpen] = useState(false)
+  const hasDescription = Boolean(String(amenity.description || '').trim())
+  return (
+    <article className="min-w-0 rounded-md border border-white/70 bg-white p-3 shadow-sm">
+      <div className="flex items-start gap-3">
+        <span className="grid h-10 w-10 shrink-0 place-items-center text-amberline">
+          <AmenityVisual amenity={amenity} className="h-9 w-9" iconSize={24} />
         </span>
-        {amenity.description ? <span className="mt-2 block text-sm font-medium leading-6 text-stone-600">{amenity.description}</span> : null}
-      </span>
-    </button>
+        <div className="min-w-0 flex-1">
+          <p className="break-words text-sm font-extrabold text-charcoal">{amenity.name}</p>
+          <p className="mt-1 text-xs font-black uppercase tracking-[0.12em] text-emerald-800">Included</p>
+          {hasDescription ? (
+            <button type="button" className="mt-1 text-xs font-black text-[#7f1d1d] underline-offset-4 hover:underline" onClick={() => setOpen((current) => !current)}>
+              {open ? 'Show less' : 'Read more'}
+            </button>
+          ) : null}
+        </div>
+      </div>
+      {open && hasDescription ? <p className="mt-2 text-sm font-medium leading-6 text-stone-600">{amenity.description}</p> : null}
+    </article>
   )
 }
 
 function RoomDetails({ room, hotel, form, nights, amenities, offers, selectedOfferId, selectedAmenityIds, selectedOffer, offerDiscount, onSelectOffer, onToggleAmenity, onBook, onClose }) {
   const gallery = Array.isArray(room.gallery) && room.gallery.length ? room.gallery : [{ url: room.hero_image_url || fallbackRoomImage, alt: room.name }]
-  const amenityItems = getBookableAmenityItems(room, amenities)
+  const { included: includedAmenities, addOns: addOnAmenities } = splitAmenityItems(room, amenities)
   const selectedAmenityItems = getSelectedAmenityItems(room, amenities, selectedAmenityIds)
   const amenitySubtotal = roundMoney(selectedAmenityItems.reduce((sum, amenity) => sum + Number(amenity.price || 0), 0) * Number(form.roomsCount || 1))
   const roomNightPrice = Number(room.subtotal ? room.subtotal / Math.max(nights, 1) : room.offer_price || room.base_price)
@@ -1374,21 +1489,40 @@ function RoomDetails({ room, hotel, form, nights, amenities, offers, selectedOff
               <Detail icon={BedDouble} label="Bed" value={room.bed_type || 'Premium bedding'} />
               <Detail icon={Bath} label="Size" value={room.size_sqft ? `${room.size_sqft} sq ft` : 'Spacious'} />
             </div>
+            {includedAmenities.length ? (
+              <div className="mt-5 rounded-lg border border-mist bg-bone/70 p-3">
+                <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
+                  <div>
+                    <p className="eyebrow">Already included</p>
+                    <h3 className="mt-1 text-xl font-extrabold text-charcoal">Room amenities</h3>
+                  </div>
+                  <span className="rounded-md bg-white px-3 py-2 text-xs font-black uppercase tracking-[0.12em] text-emerald-800">Included</span>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {includedAmenities.slice(0, 9).map((amenity) => <AmenityInfoCard key={amenity.id || amenity.name} amenity={amenity} />)}
+                </div>
+              </div>
+            ) : null}
+            {Number(room.extra_bed_count || 0) ? (
+              <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-extrabold leading-6 text-amber-950">
+                Extra bed will be added automatically for {Number(room.extra_bed_count)} extra adult{Number(room.extra_bed_count) === 1 ? '' : 's'}.
+              </p>
+            ) : null}
             <div className="mt-6 flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
               <div>
-                <p className="eyebrow">Amenities</p>
-                <h3 className="mt-1 text-2xl font-extrabold">Select stay add-ons</h3>
+                <p className="eyebrow">Add-ons</p>
+                <h3 className="mt-1 text-2xl font-extrabold">Select paid stay add-ons</h3>
               </div>
               {amenitySubtotal ? <p className="rounded-md bg-bone px-3 py-2 text-sm font-bold text-charcoal">Selected Rs {amenitySubtotal.toLocaleString('en-IN')}</p> : null}
             </div>
-            {amenityItems.length ? (
+            {addOnAmenities.length ? (
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {amenityItems.map((amenity) => (
+                {addOnAmenities.map((amenity) => (
                   <AmenityOption key={amenity.id || amenity.name} amenity={amenity} selected={selectedAmenityIds.includes(amenity.id)} onToggle={() => onToggleAmenity(amenity.id)} />
                 ))}
               </div>
             ) : (
-              <p className="mt-4 rounded-md border border-mist bg-bone p-4 text-sm font-semibold text-stone-600">The hotel has not added room-specific amenities yet.</p>
+              <p className="mt-4 rounded-md border border-mist bg-bone p-4 text-sm font-semibold text-stone-600">No paid add-ons are available for this room right now.</p>
             )}
             {offers.length ? (
               <div className="mt-7">
@@ -1503,39 +1637,138 @@ function getRoomAmenityItems(room) {
         name: amenity.name,
         description: amenity.description || '',
         price: Number(amenity.price || 0),
+        icon: amenity.icon || 'sparkles',
       }))
   }
-  return (room.amenities || []).map((name) => ({ id: '', name, description: '', price: 0 }))
+  return (room.amenities || []).map((name) => ({ id: '', name, description: '', price: 0, icon: 'sparkles' }))
 }
 
-function getBookableAmenityItems(room, hotelAmenities = []) {
-  const seen = new Set()
-  const items = []
-  for (const amenity of hotelAmenities || []) {
-    if (!amenity?.name) continue
-    const key = amenity.id || amenity.name
-    if (seen.has(key)) continue
-    seen.add(key)
-    items.push({
+function splitAmenityItems(room, hotelAmenities = []) {
+  const hotelItems = (hotelAmenities || [])
+    .filter((amenity) => amenity?.name)
+    .map((amenity) => ({
       id: amenity.id || '',
       name: amenity.name,
       description: amenity.description || '',
       price: Number(amenity.price || 0),
       icon: amenity.icon || 'sparkles',
-    })
-  }
-  for (const amenity of getRoomAmenityItems(room)) {
+    }))
+  const hotelById = new Map(hotelItems.filter((amenity) => amenity.id).map((amenity) => [amenity.id, amenity]))
+  const hotelByName = new Map(hotelItems.map((amenity) => [String(amenity.name || '').toLowerCase(), amenity]))
+  const roomItems = getRoomAmenityItems(room).map((amenity) => {
+    const catalogAmenity = (amenity.id && hotelById.get(amenity.id)) || hotelByName.get(String(amenity.name || '').toLowerCase())
+    return catalogAmenity ? { ...catalogAmenity, ...amenity, icon: catalogAmenity.icon || amenity.icon, description: catalogAmenity.description || amenity.description } : amenity
+  })
+  const included = []
+  const addOns = []
+  const includedKeys = new Set()
+  const addOnKeys = new Set()
+
+  for (const amenity of roomItems) {
     const key = amenity.id || amenity.name
-    if (seen.has(key)) continue
-    seen.add(key)
-    items.push(amenity)
+    if (Number(amenity.price || 0) > 0) {
+      if (!addOnKeys.has(key)) {
+        addOnKeys.add(key)
+        addOns.push(amenity)
+      }
+      continue
+    }
+    if (!includedKeys.has(key)) {
+      includedKeys.add(key)
+      included.push(amenity)
+    }
   }
-  return items
+
+  for (const amenity of hotelItems) {
+    const key = amenity.id || amenity.name
+    if (Number(amenity.price || 0) <= 0) {
+      if (!includedKeys.has(key)) {
+        includedKeys.add(key)
+        included.push(amenity)
+      }
+      continue
+    }
+    if (!addOnKeys.has(key)) {
+      addOnKeys.add(key)
+      addOns.push(amenity)
+    }
+  }
+
+  return { included, addOns }
+}
+
+function getAddOnAmenityItems(room, hotelAmenities = []) {
+  return splitAmenityItems(room, hotelAmenities).addOns
 }
 
 function getSelectedAmenityItems(room, hotelAmenities, selectedAmenityIds) {
   const selectedIds = new Set(selectedAmenityIds || [])
-  return getBookableAmenityItems(room, hotelAmenities).filter((amenity) => amenity.id && selectedIds.has(amenity.id))
+  return getAddOnAmenityItems(room, hotelAmenities).filter((amenity) => amenity.id && selectedIds.has(amenity.id))
+}
+
+function getDisplayRoomForGuests(room, adults = 1) {
+  if (!room || room.selected_rate_category) return room
+  const rates = room.rate_options || {}
+  const category = Number(adults || 1) <= 1 && rates.single ? 'single' : Number(adults || 1) <= 1 && rates.double ? 'double' : rates.double ? 'double' : ''
+  const rate = category ? rates[category] : null
+  if (!rate) return room
+  return {
+    ...room,
+    occupancy_adults: rate.occupancyAdults ?? room.occupancy_adults,
+    occupancy_children: rate.occupancyChildren ?? room.occupancy_children,
+    base_price: rate.basePrice ?? room.base_price,
+    offer_price: rate.offerPrice ?? null,
+    size_sqft: rate.sizeSqft ?? room.size_sqft,
+    selected_rate_category: category,
+  }
+}
+
+function roomSupportsGuestIntent(room, adults = 1, children = 0) {
+  if (!room) return false
+  const requestedAdults = Number(adults || 1)
+  const requestedChildren = Number(children || 0)
+  const rates = room.rate_options || {}
+  const candidate = requestedAdults <= 1
+    ? (rates.single || rates.double || null)
+    : (rates.double || null)
+  if (!candidate) return requestedAdults <= 1 && Number(room.occupancy_adults || 0) >= requestedAdults && Number(room.occupancy_children || 0) >= requestedChildren
+  const adultsCapacity = Number(candidate.occupancyAdults ?? room.occupancy_adults ?? 0)
+  const childrenCapacity = Number(candidate.occupancyChildren ?? room.occupancy_children ?? 0)
+  const extraAdultCapacity = requestedAdults >= 3 ? 1 : 0
+  return adultsCapacity + extraAdultCapacity >= requestedAdults && childrenCapacity >= requestedChildren
+}
+
+function getAmenityIcon(amenity) {
+  const value = String(amenity?.icon || amenity?.name || '').toLowerCase()
+  if (value.includes('wifi') || value.includes('internet')) return Wifi
+  if (value.includes('pool') || value.includes('spa')) return Waves
+  if (value.includes('gym') || value.includes('fitness')) return Dumbbell
+  if (value.includes('dining') || value.includes('breakfast') || value.includes('restaurant') || value.includes('food')) return Utensils
+  if (value.includes('bath')) return Bath
+  if (value.includes('bed') || value.includes('linen')) return BedDouble
+  return Sparkles
+}
+
+function AmenityVisual({ amenity, className = 'h-8 w-8', iconSize = 22 }) {
+  const Icon = getAmenityIcon(amenity)
+  if (isUrl(amenity?.icon)) return <img src={amenity.icon} alt="" className={`${className} object-contain`} loading="lazy" />
+  return <Icon size={iconSize} strokeWidth={2} />
+}
+
+function isUrl(value) {
+  return /^https?:\/\//i.test(String(value || '').trim())
+}
+
+function findExtraBedAmenity(amenities = []) {
+  return amenities.find((amenity) => /extra\s*bed|additional\s*bed|rollaway/i.test(String(amenity?.name || '')))
+}
+
+function withRequiredExtraBedAmenity(currentIds = [], rooms = [], amenities = [], selectedRoomId = '') {
+  const selectedRoom = rooms.find((room) => room.id === selectedRoomId) || rooms[0]
+  if (Number(selectedRoom?.extra_bed_count || 0) <= 0) return currentIds
+  const amenity = findExtraBedAmenity(amenities)
+  if (!amenity?.id || currentIds.includes(amenity.id)) return currentIds
+  return [...currentIds, amenity.id]
 }
 
 function getRoomImages(room) {
@@ -1571,14 +1804,6 @@ function getStayDateError(checkIn, checkOut) {
   if (nights < 1) return 'Check-out date must be after check-in date.'
   if (nights > 30) return 'Stay cannot be more than 30 nights.'
   return ''
-}
-
-function addDays(dateString, days) {
-  if (!dateString) return ''
-  const date = new Date(`${dateString}T00:00:00Z`)
-  if (Number.isNaN(date.getTime())) return ''
-  date.setUTCDate(date.getUTCDate() + days)
-  return date.toISOString().slice(0, 10)
 }
 
 function roundMoney(value) {

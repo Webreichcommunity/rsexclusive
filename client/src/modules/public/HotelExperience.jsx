@@ -2,6 +2,7 @@ import {
   Bath,
   BedDouble,
   CalendarDays,
+  CreditCard,
   Dumbbell,
   Gift,
   Maximize2,
@@ -41,12 +42,13 @@ function defaultDates() {
 export function HotelExperience() {
   const { data, loading, error } = useAsync(() => apiFetch('/tenant'))
   const [defaultCheckIn, defaultCheckOut] = defaultDates()
-  const [search, setSearch] = useState({ checkIn: defaultCheckIn, checkOut: defaultCheckOut, adults: 2, children: 0, roomsCount: 1 })
+  const [search, setSearch] = useState({ checkIn: defaultCheckIn, checkOut: defaultCheckOut, adults: 1, children: 0, roomsCount: 1 })
 
   if (loading) return <LoadingState label="Opening hotel" />
   if (error) return <TenantError error={error} />
 
   const { hotel, rooms, amenities = [] } = data
+  const faqs = data.faqs || []
   const offers = data.offers || []
   const heroImages = getMediaUrls(hotel.branding?.heroImages)
   const showcaseImages = getMediaUrls(hotel.branding?.showcaseImages || [hotel.branding?.showcaseImageUrl].filter(Boolean)).slice(0, 3)
@@ -86,7 +88,7 @@ export function HotelExperience() {
             <p className="mt-6 max-w-2xl text-base font-medium leading-8 text-white/88 md:text-lg">{premiumHotelSummary(hotel)}</p>
             <div className="mt-8 flex flex-wrap gap-3 text-sm font-semibold text-white/90">
               <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-amberline/88 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><CalendarDays size={16} className="text-amber-100" /> 24 hours check-in</span>
-              <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-zinc-900/70 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><Utensils size={16} className="text-amber-100" /> Breakfast available</span>
+              <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-zinc-900/70 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><CreditCard size={16} className="text-amber-100" /> 25% advance</span>
             </div>
           </FadeIn>
 
@@ -107,7 +109,7 @@ export function HotelExperience() {
                   onRangeChange={(checkIn, checkOut) => setSearch((current) => ({ ...current, checkIn, checkOut }))}
                 />
                 <Field label="Adults"><Stepper value={search.adults} min={1} onChange={(value) => setSearch({ ...search, adults: value })} /></Field>
-                <Field label="Children"><Stepper value={search.children} min={0} onChange={(value) => setSearch({ ...search, children: value })} /></Field>
+                <Field label="Children (1-7 yrs)"><Stepper value={search.children} min={0} onChange={(value) => setSearch({ ...search, children: value })} /></Field>
                 <Field label="Rooms" className="col-span-2 sm:col-span-1"><Stepper value={search.roomsCount} min={1} onChange={(value) => setSearch({ ...search, roomsCount: value })} /></Field>
               </div>
               <Link to={bookingUrl} className="btn-primary mt-5 w-full"><CalendarDays size={18} /> Search Rooms</Link>
@@ -194,6 +196,8 @@ export function HotelExperience() {
             ))}
           </Stagger>
         </section>
+
+        <FaqPreview faqs={faqs} />
       </div>
     </main>
   )
@@ -326,10 +330,11 @@ function ImageSlideshow({ images, alt }) {
 }
 
 function RoomShowcase({ room, bookingUrl, offers = [] }) {
-  const displayPrice = room.offer_price || room.base_price
+  const displayRoom = getDisplayRoomForGuests(room, 1)
+  const displayPrice = displayRoom.offer_price || displayRoom.base_price
   const availabilityUrl = `${bookingUrl}&roomTypeId=${room.id}`
   const detailsUrl = `${availabilityUrl}&step=details`
-  const roomPriceSaving = room.offer_price ? Math.max(0, Number(room.base_price || 0) - Number(room.offer_price || 0)) : 0
+  const roomPriceSaving = displayRoom.offer_price ? Math.max(0, Number(displayRoom.base_price || 0) - Number(displayRoom.offer_price || 0)) : 0
   const possibleLoyaltyPoints = Math.max(0, Math.floor(Number(displayPrice || 0) / 100))
   return (
     <StaggerItem>
@@ -338,9 +343,9 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
           <RotatingRoomImage room={room} className="h-full w-full object-cover" />
         </div>
         <div className="flex min-w-0 flex-col gap-3 p-4 sm:p-5">
-          <p className="text-xs font-bold uppercase tracking-[0.12em] text-stone-500">{room.bed_type || 'Curated stay'}</p>
-          <h3 className="text-2xl font-bold leading-tight">{room.name}</h3>
-          <p className="line-clamp-2 text-sm leading-6 text-stone-600">{room.description || 'A composed room category prepared for comfort, clarity, and direct booking.'}</p>
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-stone-500">{displayRoom.bed_type || 'Curated stay'}</p>
+          <h3 className="text-2xl font-bold leading-tight">{displayRoom.name}</h3>
+          <p className="line-clamp-2 text-sm leading-6 text-stone-600">{displayRoom.description || 'A composed room category prepared for comfort, clarity, and direct booking.'}</p>
           <div className="flex flex-wrap gap-2">
             {(room.amenities || []).slice(0, 3).map((amenity) => <span key={amenity} className="rounded-md bg-bone px-3 py-2 text-xs font-bold text-stone-600">{amenity}</span>)}
           </div>
@@ -357,7 +362,7 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
           <div className="grid grid-cols-[auto_1fr] items-start gap-3 xl:block">
             <span className="w-fit rounded-md bg-white px-3 py-2 text-xs font-bold text-stone-600 shadow-sm">{room.size_sqft || 'Spacious'} sq ft</span>
             <div className="min-w-0 text-right xl:mt-3 xl:text-left">
-              {room.offer_price ? <p className="text-xs font-bold text-stone-500 line-through sm:text-sm">Rs {Number(room.base_price).toLocaleString('en-IN')}</p> : null}
+              {displayRoom.offer_price ? <p className="text-xs font-bold text-stone-500 line-through sm:text-sm">Rs {Number(displayRoom.base_price).toLocaleString('en-IN')}</p> : null}
               <p className="text-2xl font-black leading-none text-emerald-800 sm:text-3xl">Rs {Number(displayPrice).toLocaleString('en-IN')}</p>
               <p className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">per night</p>
               {roomPriceSaving ? <p className="mt-2 inline-flex rounded-md bg-white px-3 py-2 text-xs font-black text-emerald-800 shadow-sm">Save Rs {roomPriceSaving.toLocaleString('en-IN')}</p> : null}
@@ -478,12 +483,28 @@ function getRoomImages(room) {
   return images.length ? images : [{ url: fallbackRoomImage, alt: room?.name || 'Room' }]
 }
 
+function getDisplayRoomForGuests(room, adults = 1) {
+  if (!room || room.selected_rate_category) return room
+  const rates = room.rate_options || {}
+  const category = Number(adults || 1) <= 1 && rates.single ? 'single' : Number(adults || 1) <= 1 && rates.double ? 'double' : rates.double ? 'double' : ''
+  const rate = category ? rates[category] : null
+  if (!rate) return room
+  return {
+    ...room,
+    occupancy_adults: rate.occupancyAdults ?? room.occupancy_adults,
+    occupancy_children: rate.occupancyChildren ?? room.occupancy_children,
+    base_price: rate.basePrice ?? room.base_price,
+    offer_price: rate.offerPrice ?? null,
+    size_sqft: rate.sizeSqft ?? room.size_sqft,
+    selected_rate_category: category,
+  }
+}
+
 function AmenityCard({ amenity }) {
-  const Icon = getAmenityIcon(amenity)
   return (
     <FadeIn className="flex min-h-40 w-[66vw] max-w-[16rem] shrink-0 snap-start flex-col justify-between rounded-lg bg-white p-5 text-left shadow-soft ring-1 ring-stone-200/70 transition duration-300 hover:-translate-y-1 hover:shadow-card sm:w-60">
-      <span className="grid h-12 w-12 place-items-center rounded-md bg-transparent text-amberline">
-        {isUrl(amenity.icon) ? <img src={amenity.icon} alt="" className="h-9 w-9 object-contain" loading="lazy" /> : <Icon size={28} strokeWidth={1.8} />}
+      <span className="grid h-12 w-12 place-items-center text-amberline">
+        <AmenityVisual amenity={amenity} className="h-10 w-10" iconSize={30} />
       </span>
       <div className="mt-5">
         <p className="text-base font-extrabold text-charcoal">{amenity.name}</p>
@@ -492,6 +513,44 @@ function AmenityCard({ amenity }) {
       </div>
     </FadeIn>
   )
+}
+
+function FaqPreview({ faqs }) {
+  const visibleFaqs = (faqs.length ? faqs : fallbackFaqs).slice(0, 3)
+  return (
+    <section id="faq-preview" className="container-page pb-16 md:pb-24">
+      <FadeIn className="overflow-hidden rounded-lg border border-stone-200 bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_55%,#fff7ed_100%)] shadow-panel">
+        <div className="grid gap-5 p-4 sm:p-5 lg:grid-cols-[0.8fr_1.2fr] lg:p-6">
+          <div>
+            <p className="eyebrow">FAQ</p>
+            <h2 className="mt-2 text-3xl font-black leading-tight text-charcoal md:text-4xl">Quick Answers Before You Book</h2>
+            <p className="mt-3 text-sm font-semibold leading-7 text-stone-600">Read the essentials, then open the complete hotel FAQ for every published answer.</p>
+            <Link to={withTenantQuery('/faq')} className="btn-primary mt-5 w-full sm:w-auto">View full FAQ</Link>
+          </div>
+          <div className="grid gap-3">
+            {visibleFaqs.map((faq, index) => (
+              <article key={faq.id || `${faq.question}-${index}`} className="rounded-md border border-white/80 bg-white p-4 shadow-sm">
+                <p className="text-base font-extrabold text-charcoal">{faq.question}</p>
+                <p className="mt-2 line-clamp-2 text-sm font-semibold leading-6 text-stone-600">{faq.answer}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      </FadeIn>
+    </section>
+  )
+}
+
+const fallbackFaqs = [
+  { question: 'What documents are required at check-in?', answer: 'Every guest above 18 years must carry an original government-approved photo ID at check-in.' },
+  { question: 'How do I confirm my arrival time?', answer: 'The hotel may contact you before check-in, and you can also use the contact details on this website.' },
+  { question: 'Can I book directly from this website?', answer: 'Yes. Search your dates, select a room, review the price, and complete secure payment online.' },
+]
+
+function AmenityVisual({ amenity, className = 'h-8 w-8', iconSize = 22 }) {
+  const Icon = getAmenityIcon(amenity)
+  if (isUrl(amenity?.icon)) return <img src={amenity.icon} alt="" className={`${className} object-contain`} loading="lazy" />
+  return <Icon size={iconSize} strokeWidth={1.9} />
 }
 
 function getAmenityIcon(amenity) {

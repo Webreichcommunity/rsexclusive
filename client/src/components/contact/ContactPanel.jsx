@@ -70,9 +70,9 @@ export function ContactPanel({ hotel }) {
           <h2 className="mt-3 text-3xl font-bold leading-tight md:text-5xl">Share a stay note with the hotel team.</h2>
           <p className="mt-4 max-w-xl text-sm leading-7 text-stone-600 md:text-base">Rate your experience and send a clear message to the property team. Logged-in guest details are filled automatically.</p>
           <div className="mt-6 grid gap-3 text-sm font-semibold text-stone-600">
-            <span className="flex items-center gap-2 rounded-lg border border-stone-200 bg-white p-4"><Mail size={17} className="text-amberline" /> {hotelEmail}</span>
-            {phones[0] ? <span className="flex items-center gap-2 rounded-lg border border-stone-200 bg-white p-4"><Phone size={17} className="text-amberline" /> {phones.join(', ')}</span> : null}
-            <span className="flex items-center gap-2 rounded-lg border border-stone-200 bg-white p-4"><MapPin size={17} className="text-amberline" /> {formatAddress(hotel)}</span>
+            <span className="flex items-center gap-2 rounded-lg border border-stone-200 bg-white p-4"><Mail size={17} className="shrink-0 text-amberline" /> <span className="min-w-0 break-words">{hotelEmail}</span></span>
+            {phones[0] ? <span className="flex items-center gap-2 rounded-lg border border-stone-200 bg-white p-4"><Phone size={17} className="shrink-0 text-amberline" /> <span className="min-w-0 break-words">{phones.join(', ')}</span></span> : null}
+            <span className="flex items-start gap-2 rounded-lg border border-stone-200 bg-white p-4"><MapPin size={19} className="mt-0.5 shrink-0 text-amberline" /> <span className="line-clamp-2 min-w-0 leading-6">{formatAddress(hotel)}</span></span>
           </div>
           {!accessKey ? (
             <a className="btn-secondary mt-6" href={`mailto:${hotelEmail}`}>

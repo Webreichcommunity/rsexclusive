@@ -5,8 +5,8 @@ import { optionalTenant, requireTenant } from '../middleware/tenant.js'
 import { validate } from '../middleware/validate.js'
 import { getFirebaseAuth } from '../services/firebaseAdminService.js'
 import { availabilitySchema, searchAvailability } from '../services/availabilityService.js'
-import { createBookingHold, confirmBookingPayment } from '../services/bookingService.js'
-import { getHotelProfile, listActiveHotels, listAmenitiesForHotel, listOffersForHotel, listRoomsForHotel } from '../services/hotelService.js'
+import { createBookingHold, confirmBookingPayment, releaseExpiredBookingHolds } from '../services/bookingService.js'
+import { getHotelProfile, listActiveHotels, listAmenitiesForHotel, listFaqsForHotel, listOffersForHotel, listRoomsForHotel } from '../services/hotelService.js'
 import { createAsyncRouter } from '../utils/asyncRouter.js'
 import { createCache } from '../utils/cache.js'
 import { badRequest, conflict, forbidden, unauthorized } from '../utils/errors.js'
@@ -40,6 +40,8 @@ const bookingSchema = z.object({
   guestName: z.string().min(2).max(120),
   guestEmail: z.string().email(),
   guestPhone: z.string().min(7).max(24),
+  termsAccepted: z.literal(true),
+  termsVersion: z.string().min(4).max(40).default('2026-09-19'),
 })
 
 const verifyPaymentSchema = z.object({
@@ -52,9 +54,6 @@ const registerSchema = z.object({
   fullName: z.string().min(2).max(120),
   phone: z.string().max(24).optional(),
   photoUrl: z.string().url().max(500).optional(),
-  termsAccepted: z.literal(true),
-  termsVersion: z.string().min(4).max(40),
-  termsAcceptedAt: z.string().datetime().optional(),
 })
 
 const profileSchema = z.object({
@@ -86,11 +85,12 @@ publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, requireActiveHo
   const cacheKey = `tenant:${req.hotel.id}:${req.user?.id || 'guest'}`
   const cached = publicCache.get(cacheKey)
   if (cached) return res.json(cached)
-  const [hotel, rooms, amenities, offers, loyaltyRows] = await Promise.all([
+  const [hotel, rooms, amenities, offers, faqs, loyaltyRows] = await Promise.all([
     getHotelProfile(req.hotel.id),
     listRoomsForHotel(req.hotel.id),
     listAmenitiesForHotel(req.hotel.id),
     listOffersForHotel(req.hotel.id, req.user?.id || null),
+    listFaqsForHotel(req.hotel.id),
     req.user
       ? query(
           `SELECT coalesce(sum(points_balance), 0)::int AS points
@@ -100,7 +100,7 @@ publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, requireActiveHo
         )
       : Promise.resolve({ rows: [] }),
   ])
-  res.json(publicCache.set(cacheKey, { hotel, rooms, amenities, offers, loyaltyPoints: loyaltyRows.rows[0]?.points || 0 }))
+  res.json(publicCache.set(cacheKey, { hotel, rooms, amenities, offers, faqs, loyaltyPoints: loyaltyRows.rows[0]?.points || 0 }))
 })
 
 publicRoutes.post('/auth/register', optionalTenant, requireActiveHotel, validate(registerSchema), async (req, res) => {
@@ -160,12 +160,6 @@ publicRoutes.post('/auth/register', optionalTenant, requireActiveHotel, validate
           JSON.stringify({
             ...(existingRows[0].profile || {}),
             photoUrl: req.body.photoUrl || existingRows[0].profile?.photoUrl || firebaseUser.picture || '',
-            termsAndConditions: {
-              accepted: true,
-              version: req.body.termsVersion,
-              acceptedAt: req.body.termsAcceptedAt || new Date().toISOString(),
-              source: 'guest_registration',
-            },
           }),
           existingRows[0].id,
         ],
@@ -183,12 +177,6 @@ publicRoutes.post('/auth/register', optionalTenant, requireActiveHotel, validate
           req.body.phone || null,
           JSON.stringify({
             photoUrl: req.body.photoUrl || firebaseUser.picture || '',
-            termsAndConditions: {
-              accepted: true,
-              version: req.body.termsVersion,
-              acceptedAt: req.body.termsAcceptedAt || new Date().toISOString(),
-              source: 'guest_registration',
-            },
           }),
           req.hotel.id,
         ],
@@ -210,11 +198,13 @@ publicRoutes.post('/auth/register', optionalTenant, requireActiveHotel, validate
 })
 
 publicRoutes.get('/availability', requireTenant, requireActiveHotel, validate(availabilitySchema, 'query'), async (req, res) => {
+  await releaseExpiredBookingHolds({ query })
   const rooms = await searchAvailability({ query }, req.hotel.id, req.query)
   res.json({ rooms })
 })
 
 publicRoutes.post('/bookings/hold', requireTenant, requireActiveHotel, authenticate, validate(bookingSchema), async (req, res) => {
+  await releaseExpiredBookingHolds({ query })
   const hold = await createBookingHold({ hotel: req.hotel, user: req.user, payload: req.body })
   res.status(201).json(hold)
 })
@@ -320,7 +310,9 @@ publicRoutes.patch('/me', optionalTenant, authenticate, validate(profileSchema),
 
 publicRoutes.get('/me/bookings', optionalTenant, authenticate, async (req, res) => {
   const { rows } = await query(
-    `SELECT b.*, h.name AS hotel_name, rt.name AS room_type_name, i.pdf_url
+    `SELECT b.*, h.name AS hotel_name, rt.name AS room_type_name,
+            rt.bed_type, rt.size_sqft, rt.description AS room_description, rt.hero_image_url AS room_image_url,
+            i.invoice_number, i.issued_at AS invoice_issued_at, i.pdf_url
      FROM bookings b
      JOIN hotels h ON h.id = b.hotel_id
      JOIN room_types rt ON rt.id = b.room_type_id
@@ -335,7 +327,9 @@ publicRoutes.get('/me/bookings', optionalTenant, authenticate, async (req, res) 
 
 publicRoutes.get('/me/bookings/:bookingReference', optionalTenant, authenticate, async (req, res) => {
   const { rows } = await query(
-    `SELECT b.*, h.name AS hotel_name, rt.name AS room_type_name, rt.hero_image_url AS room_image_url, i.pdf_url
+    `SELECT b.*, h.name AS hotel_name, rt.name AS room_type_name,
+            rt.bed_type, rt.size_sqft, rt.description AS room_description, rt.hero_image_url AS room_image_url,
+            i.invoice_number, i.issued_at AS invoice_issued_at, i.pdf_url
      FROM bookings b
      JOIN hotels h ON h.id = b.hotel_id
      JOIN room_types rt ON rt.id = b.room_type_id

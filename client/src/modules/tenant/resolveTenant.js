@@ -12,6 +12,8 @@ const reservedPathSegments = new Set([
   'rooms',
   'super-admin',
   'account',
+  'faq',
+  'terms',
 ])
 
 function readSavedTenant() {
@@ -93,7 +95,7 @@ export function resolveTenantFromLocation(location = window.location) {
   const host = location.hostname.toLowerCase()
   if (localHostnames.has(host)) {
     const saved = readSavedTenant()
-    const tenantOnlyPaths = ['/book', '/rooms', '/admin', '/login', '/account', '/confirmation']
+    const tenantOnlyPaths = ['/book', '/rooms', '/admin', '/login', '/account', '/confirmation', '/faq', '/terms']
     if (saved && tenantOnlyPaths.some((path) => location.pathname.startsWith(path))) {
       return { isTenant: true, key: normalizeTenantKey(saved), source: 'local-storage' }
     }

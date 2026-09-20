@@ -2,7 +2,7 @@ import { apiFetch } from './apiClient.js'
 
 export async function uploadImageToCloudinary(file, { signatureUrl = '/media/signature', folder = 'hotel-assets' } = {}) {
   if (!file) return null
-  const uploadFile = await compressImageForUpload(file)
+  const uploadFile = await compressImageForUpload(file, { preserveTransparency: folder.includes('logo') })
   const signature = await apiFetch(signatureUrl, { method: 'POST', body: { folder } })
   const formData = new FormData()
   formData.set('file', uploadFile)
@@ -25,9 +25,10 @@ export async function uploadImageToCloudinary(file, { signatureUrl = '/media/sig
   }
 }
 
-async function compressImageForUpload(file) {
+async function compressImageForUpload(file, { preserveTransparency = false } = {}) {
   if (!file?.type?.startsWith('image/')) return file
   if (file.type === 'image/gif' || file.type === 'image/svg+xml') return file
+  if (preserveTransparency || file.type === 'image/png' || file.type === 'image/webp') return file
 
   const imageUrl = URL.createObjectURL(file)
   try {

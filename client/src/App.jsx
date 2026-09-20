@@ -17,6 +17,8 @@ const GroupLanding = lazy(() => import('./modules/public/GroupLanding.jsx').then
 const HotelExperience = lazy(() =>
   import('./modules/public/HotelExperience.jsx').then((module) => ({ default: module.HotelExperience })),
 )
+const TermsPage = lazy(() => import('./modules/public/PolicyPages.jsx').then((module) => ({ default: module.TermsPage })))
+const FaqPage = lazy(() => import('./modules/public/PolicyPages.jsx').then((module) => ({ default: module.FaqPage })))
 const SuperAdminPage = lazy(() => import('./modules/super-admin/SuperAdminPage.jsx').then((module) => ({ default: module.SuperAdminPage })))
 
 export default function App() {
@@ -30,6 +32,8 @@ export default function App() {
           <Route path="/:hotelKey" element={<HotelExperience />} />
           <Route path="/:hotelKey/rooms" element={<HotelExperience focus="rooms" />} />
           <Route path="/:hotelKey/book" element={<BookingPage />} />
+          <Route path="/:hotelKey/terms" element={<TermsPage />} />
+          <Route path="/:hotelKey/faq" element={<FaqPage />} />
           <Route path="/:hotelKey/confirmation/:bookingReference" element={<ConfirmationPage />} />
           <Route path="/:hotelKey/account" element={<AccountPage />} />
           <Route path="/:hotelKey/login" element={<LoginPage />} />
@@ -37,6 +41,8 @@ export default function App() {
           <Route path="/:hotelKey/admin" element={<RequireConsoleAuth mode={mode}><AdminDashboard /></RequireConsoleAuth>} />
           <Route path="/rooms" element={<HotelExperience focus="rooms" />} />
           <Route path="/book" element={<BookingPage />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/faq" element={<FaqPage />} />
           <Route path="/confirmation/:bookingReference" element={<ConfirmationPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route path="/login" element={<LoginPage />} />

@@ -26,6 +26,7 @@ import { StatusPill } from '../../components/ui/StatusPill.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { uploadImageToCloudinary } from '../../services/cloudinaryUpload.js'
+import { logoDisplayUrl } from '../../utils/logoUrl.js'
 import { logout } from '../auth/firebaseClient.js'
 import { buildHotelUrl, formatHotelHost } from '../tenant/resolveTenant.js'
 
@@ -60,6 +61,8 @@ const emptyHotel = {
   diningImage: null,
   youtubeEmbedUrl: '',
   gallery: [],
+  paymentRoutingType: 'primary',
+  razorpayLinkedAccountId: '',
 }
 
 const emptyAdmin = {
@@ -378,7 +381,11 @@ function HotelList({ hotels, onDetail, onStatus, onDelete, saving }) {
         {hotels.map((hotel) => (
           <StaggerItem key={hotel.id} className="grid gap-4 border-b border-stone-100 p-4 lg:grid-cols-[1.2fr_0.7fr_0.6fr_0.6fr_160px] lg:items-center">
             <div className="flex min-w-0 items-center gap-3">
-              <img src={hotel.branding?.logoUrl || hotel.hero_image_url || 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=300&q=80'} alt={hotel.name} className="h-12 w-12 rounded-md object-cover" />
+              <img
+                src={hotel.branding?.logoUrl ? logoDisplayUrl(hotel.branding.logoUrl) : hotel.hero_image_url || 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=300&q=80'}
+                alt={hotel.name}
+                className={`h-12 w-12 ${hotel.branding?.logoUrl ? 'object-contain' : 'rounded-md object-cover'}`}
+              />
               <div className="min-w-0">
                 <p className="truncate text-2xl font-semibold">{hotel.name}</p>
                 <p className="truncate text-xs font-bold text-stone-500">{formatHotelHost(hotel)} / {hotel.slug}</p>
@@ -417,6 +424,28 @@ function HotelForm({ mode, form, saving, onBack, onChange, onSubmit, onUpload, o
           <Field label="Slug"><input className="input" value={form.slug} onChange={(event) => onChange('slug', slugify(event.target.value))} required /></Field>
           <Field label="Subdomain"><input className="input" value={form.subdomain} onChange={(event) => onChange('subdomain', slugify(event.target.value))} required /></Field>
           <Field label="Description"><textarea className="input min-h-28 py-3" value={form.description} onChange={(event) => onChange('description', event.target.value)} required /></Field>
+        </FormBlock>
+
+        <FormBlock title="Razorpay payment routing">
+          <Field label="Settlement account">
+            <select className="input" value={form.paymentRoutingType} onChange={(event) => onChange('paymentRoutingType', event.target.value)}>
+              <option value="primary">Primary Razorpay account</option>
+              <option value="linked">Route linked account</option>
+            </select>
+          </Field>
+          <Field label="Linked account ID">
+            <input
+              className="input"
+              value={form.razorpayLinkedAccountId}
+              onChange={(event) => onChange('razorpayLinkedAccountId', event.target.value.trim())}
+              placeholder="acc_..."
+              disabled={form.paymentRoutingType !== 'linked'}
+              required={form.paymentRoutingType === 'linked'}
+            />
+          </Field>
+          <p className="rounded-md bg-stone-50 p-3 text-sm font-semibold leading-6 text-stone-600 md:col-span-2">
+            Use primary for Hotel Ranjeet. Use linked account for RS Exclusive Stay and Fine Dine or RG Exclusive Stay and Fine Dine so Razorpay Route settles that hotel's bookings into its mapped bank account.
+          </p>
         </FormBlock>
 
         <FormBlock title="Contact and socials">
@@ -479,12 +508,17 @@ function HotelDetail({ hotel, loading, detail, hotels, adminForm, saving, onBack
     { icon: BarChart3, label: 'Payment value', value: `Rs ${Number(capturedPayments?.amount || 0).toLocaleString('en-IN')}` },
     { icon: Activity, label: 'Payment attempts', value: createdPayments },
   ]
+  const detailHeroIsLogo = !hotel.hero_image_url && hotel.branding?.logoUrl
 
   return (
     <FadeIn className="mt-6 grid gap-4">
       <div className="overflow-hidden rounded-lg border border-stone-200 bg-white shadow-panel">
         <div className="relative h-48 sm:h-56">
-          <img src={hotel.hero_image_url || hotel.branding?.logoUrl || 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1400&q=80'} alt={hotel.name} className="h-full w-full object-cover" />
+          <img
+            src={hotel.hero_image_url || (hotel.branding?.logoUrl ? logoDisplayUrl(hotel.branding.logoUrl) : '') || 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1400&q=80'}
+            alt={hotel.name}
+            className={`h-full w-full ${detailHeroIsLogo ? 'object-contain p-8' : 'object-cover'}`}
+          />
           <div className="absolute inset-0 bg-gradient-to-r from-charcoal/70 to-transparent" />
           <div className="absolute bottom-5 left-5 text-white">
             <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-white/70">Hotel report</p>
@@ -760,6 +794,10 @@ function toHotelPayload(form) {
       },
     },
     policies: { checkIn: form.checkIn, checkOut: form.checkOut, cancellation: 'Configured by hotel admin.' },
+    paymentConfig: {
+      routingType: form.paymentRoutingType,
+      linkedAccountId: form.paymentRoutingType === 'linked' ? form.razorpayLinkedAccountId : '',
+    },
     branding: {
       logoText: form.name,
       logoUrl: form.logoUrl,
@@ -807,6 +845,8 @@ function toHotelForm(hotel) {
     diningImage: normalizeMediaItems([hotel.branding?.diningImage || hotel.branding?.diningImageUrl].filter(Boolean))[0] || null,
     youtubeEmbedUrl: hotel.branding?.youtubeEmbedUrl || '',
     gallery: normalizeMediaItems(hotel.branding?.gallery || []).slice(0, 5),
+    paymentRoutingType: hotel.payment_config?.routingType || hotel.payment_config?.routing_type || 'primary',
+    razorpayLinkedAccountId: hotel.payment_config?.linkedAccountId || hotel.payment_config?.linked_account_id || '',
   }
 }
 
