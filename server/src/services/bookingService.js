@@ -26,6 +26,18 @@ async function ensureCustomer(db, hotelId, user) {
   return rows[0].id
 }
 
+async function saveCheckoutPhoneToProfile(db, user, phone) {
+  const normalizedPhone = String(phone || '').trim()
+  if (!user?.id || !normalizedPhone) return
+  await db.query(
+    `UPDATE users
+     SET phone = $1,
+         updated_at = now()
+     WHERE id = $2`,
+    [normalizedPhone, user.id],
+  )
+}
+
 export function calculateBookingAmounts(subtotal) {
   const subtotalAmount = Math.round((Number(subtotal || 0) + Number.EPSILON) * 100) / 100
   const tax = Math.round(((subtotalAmount * FIXED_TAX_RATE) / 100 + Number.EPSILON) * 100) / 100
@@ -80,7 +92,17 @@ function getLoyaltyRedemptionMinPoints(hotel) {
   return Math.max(0, Number(hotel?.policies?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
 }
 
-async function findApplicableOffer(db, hotelId, userId, offerId) {
+function normalizeGstClaim(input = {}) {
+  if (!input?.enabled) return { enabled: false }
+  return {
+    enabled: true,
+    companyName: String(input.companyName || '').trim(),
+    gstNumber: String(input.gstNumber || '').trim().toUpperCase(),
+    companyAddress: String(input.companyAddress || '').trim(),
+  }
+}
+
+async function findApplicableOffer(db, hotelId, userId, offerId, roomTypeId) {
   if (!offerId) return null
   const { rows } = await db.query(
     `WITH user_metrics AS (
@@ -95,12 +117,13 @@ async function findApplicableOffer(db, hotelId, userId, offerId) {
        AND o.hotel_id = $1
        AND o.active = true
        AND now() BETWEEN o.starts_at AND o.ends_at
+       AND (cardinality(coalesce(o.room_type_ids, '{}'::uuid[])) = 0 OR $4::uuid = ANY(o.room_type_ids))
        AND (
          o.audience_type = 'general'
          OR ($2::uuid IS NOT NULL AND o.audience_type = 'repeat_guest' AND um.qualified_bookings >= o.min_completed_bookings)
        )
      LIMIT 1`,
-    [hotelId, userId || null, offerId],
+    [hotelId, userId || null, offerId, roomTypeId],
   )
   if (!rows[0]) throw conflict('This offer is not available for this booking.', 'offer_unavailable')
   return rows[0]
@@ -228,23 +251,27 @@ export async function createBookingHold({ hotel, user, payload }) {
     }
 
     const roomSubtotal = Number(availability[0].subtotal || lockedRows.reduce((sum, row) => sum + Number(row.price), 0)) * roomsCount
-    const selectedAmenityIds = [...new Set(payload.selectedAmenityIds || [])]
-    if (availability[0]?.extra_bed_recommended) {
-      const extraBedAmenityId = await findExtraBedAmenityId(db, hotel.id)
+    let selectedAmenityIds = [...new Set(payload.selectedAmenityIds || [])]
+    const extraBedAmenityId = await findExtraBedAmenityId(db, hotel.id)
+    if (Number(payload.adults || 1) === 3 && availability[0]?.extra_bed_recommended) {
       if (extraBedAmenityId && !selectedAmenityIds.includes(extraBedAmenityId)) {
         selectedAmenityIds.push(extraBedAmenityId)
       }
+    } else if (extraBedAmenityId) {
+      selectedAmenityIds = selectedAmenityIds.filter((id) => id !== extraBedAmenityId)
     }
 
     const selectedAmenities = await findSelectedAmenities(db, hotel.id, selectedAmenityIds)
     const amenitySubtotal = selectedAmenities.reduce((sum, amenity) => sum + Number(amenity.price || 0) * roomsCount, 0)
     const grossSubtotal = Math.round((roomSubtotal + amenitySubtotal + Number.EPSILON) * 100) / 100
-    const appliedOffer = await findApplicableOffer(db, hotel.id, user?.id || null, payload.offerId)
+    const appliedOffer = await findApplicableOffer(db, hotel.id, user?.id || null, payload.offerId, roomTypeId)
     const discountAmount = calculateOfferDiscount(appliedOffer, grossSubtotal)
     const afterOfferSubtotal = Math.max(0, Math.round((grossSubtotal - discountAmount + Number.EPSILON) * 100) / 100)
     const customerId = await ensureCustomer(db, hotel.id, user)
+    await saveCheckoutPhoneToProfile(db, user, payload.guestPhone)
     const reference = `RS-${bookingRef()}`
     const redemptionMinPoints = getLoyaltyRedemptionMinPoints(hotel)
+    const gstClaim = normalizeGstClaim(payload.gstClaim)
     const bookingMetadata = {
       pricing: {
         roomSubtotal: Math.round((roomSubtotal + Number.EPSILON) * 100) / 100,
@@ -261,7 +288,8 @@ export async function createBookingHold({ hotel, user, payload }) {
         source: 'room_booking',
       },
       selectedAmenities,
-      ...(availability[0]?.extra_bed_recommended
+      gstClaim,
+      ...(Number(payload.adults || 1) === 3 && availability[0]?.extra_bed_recommended
         ? {
             extraBed: {
               required: true,
@@ -280,6 +308,7 @@ export async function createBookingHold({ hotel, user, payload }) {
               discountValue: Number(appliedOffer.discount_value || 0),
               discountAmount,
               originalSubtotal: grossSubtotal,
+              roomTypeIds: appliedOffer.room_type_ids || [],
             },
           }
         : {}),
@@ -300,9 +329,9 @@ export async function createBookingHold({ hotel, user, payload }) {
         hotel_id, customer_id, user_id, room_type_id, booking_reference, status,
         check_in, check_out, nights, rooms_count, adults, children, guest_name,
         guest_email, guest_phone, subtotal_amount, tax_amount, total_amount,
-        currency, hold_expires_at, metadata
+        currency, hold_expires_at, metadata, gst_claim
       )
-      VALUES ($1,$2,$3,$4,$5,'payment_pending',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now() + interval '15 minutes', $19::jsonb)
+      VALUES ($1,$2,$3,$4,$5,'payment_pending',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now() + interval '15 minutes', $19::jsonb, $20::jsonb)
       RETURNING *`,
       [
         hotel.id,
@@ -324,6 +353,7 @@ export async function createBookingHold({ hotel, user, payload }) {
         0,
         hotel.currency,
         JSON.stringify(bookingMetadata),
+        JSON.stringify(gstClaim),
       ],
     )
 
@@ -410,6 +440,107 @@ export async function createBookingHold({ hotel, user, payload }) {
       },
     }
   })
+}
+
+export async function ensureBookingReceiptByInvoice(invoiceNumber) {
+  const result = await transaction(async (db) => {
+    const { rows: invoiceRows } = await db.query(
+      `SELECT i.*
+       FROM invoices i
+       WHERE i.invoice_number = $1
+       FOR UPDATE`,
+      [invoiceNumber],
+    )
+    const invoice = invoiceRows[0]
+    if (!invoice) throw notFound('Receipt not found')
+    return loadReceiptData(db, invoice.booking_id, invoice)
+  })
+
+  const pdf = await generateBookingPdf(result)
+  await query('UPDATE invoices SET pdf_url = $1 WHERE id = $2', [pdf.publicUrl, result.invoice.id])
+  return { ...pdf, invoice: { ...result.invoice, pdf_url: pdf.publicUrl } }
+}
+
+export async function ensureBookingReceipt(bookingId) {
+  const result = await transaction(async (db) => {
+    const { rows: bookingRows } = await db.query(
+      `SELECT id, hotel_id, booking_reference
+       FROM bookings
+       WHERE id = $1
+       FOR UPDATE`,
+      [bookingId],
+    )
+    const booking = bookingRows[0]
+    if (!booking) throw notFound('Booking not found')
+    const { rows: invoiceRows } = await db.query(
+      `INSERT INTO invoices (hotel_id, booking_id, invoice_number, status, issued_at)
+       VALUES ($1, $2, $3, 'issued', now())
+       ON CONFLICT (booking_id) DO UPDATE
+       SET status = 'issued',
+           issued_at = coalesce(invoices.issued_at, now())
+       RETURNING *`,
+      [booking.hotel_id, booking.id, `INV-${booking.booking_reference}`],
+    )
+    return loadReceiptData(db, booking.id, invoiceRows[0])
+  })
+
+  const pdf = await generateBookingPdf(result)
+  await query('UPDATE invoices SET pdf_url = $1 WHERE id = $2', [pdf.publicUrl, result.invoice.id])
+  return { ...pdf, invoice: { ...result.invoice, pdf_url: pdf.publicUrl } }
+}
+
+async function loadReceiptData(db, bookingId, invoice) {
+  const [{ rows: bookingRows }, { rows: hotelRows }] = await Promise.all([
+    db.query(
+      `SELECT b.*,
+              h.name AS hotel_name,
+              coalesce(rt.name, b.room_snapshot->>'name') AS room_type_name
+       FROM bookings b
+       JOIN hotels h ON h.id = b.hotel_id
+       LEFT JOIN room_types rt ON rt.id = b.room_type_id
+       WHERE b.id = $1
+       LIMIT 1`,
+      [bookingId],
+    ),
+    db.query(
+      `SELECT h.*
+       FROM hotels h
+       JOIN bookings b ON b.hotel_id = h.id
+       WHERE b.id = $1
+       LIMIT 1`,
+      [bookingId],
+    ),
+  ])
+  const booking = bookingRows[0]
+  if (!booking) throw notFound('Booking not found')
+  const room = booking.room_type_id
+    ? (await db.query(
+        `SELECT id, name, slug, description, occupancy_adults, occupancy_children,
+                base_price, offer_price, size_sqft, bed_type, amenities,
+                amenity_items, hero_image_url, gallery
+         FROM room_types
+         WHERE id = $1
+         LIMIT 1`,
+        [booking.room_type_id],
+      )).rows[0]
+    : snapshotRoom(booking.room_snapshot)
+  return { booking, hotel: hotelRows[0], room, invoice }
+}
+
+function snapshotRoom(snapshot = {}) {
+  if (!snapshot || typeof snapshot !== 'object') return null
+  return {
+    id: snapshot.id || null,
+    name: snapshot.name || 'Deleted room category',
+    slug: snapshot.slug || '',
+    description: snapshot.description || 'Room details captured at booking time.',
+    bed_type: snapshot.bed_type || null,
+    size_sqft: snapshot.size_sqft || null,
+    amenities: snapshot.amenities || [],
+    amenity_items: snapshot.amenity_items || [],
+    hero_image_url: snapshot.hero_image_url || null,
+    gallery: snapshot.gallery || [],
+  }
 }
 
 export async function confirmBookingPayment({ orderId, paymentId, signature, trustedWebhook = false }) {

@@ -7,6 +7,7 @@ import { validate } from '../middleware/validate.js'
 import { query, transaction } from '../db/pool.js'
 import { deleteFirebaseUser } from '../services/firebaseAdminService.js'
 import { recordActivity } from '../services/activityService.js'
+import { ensureBookingReceipt } from '../services/bookingService.js'
 import { createAsyncRouter } from '../utils/asyncRouter.js'
 import { badRequest, conflict, notFound } from '../utils/errors.js'
 
@@ -122,6 +123,12 @@ const bookingCreateSchema = z.object({
   totalAmount: z.coerce.number().nonnegative().optional(),
 })
 
+const cancellationReviewSchema = z.object({
+  status: z.enum(['approved', 'rejected']),
+  refundAmount: z.coerce.number().nonnegative().optional(),
+  adminMessage: z.string().max(800).optional(),
+})
+
 const hotelSettingsSchema = z.object({
   loyaltyRedemptionMinPoints: z.coerce.number().int().min(0).max(1000000).default(1000),
 })
@@ -147,6 +154,7 @@ const offerSchema = z.object({
   code: z.string().max(40).optional(),
   discountType: z.enum(['percentage', 'fixed']).default('percentage'),
   discountValue: z.coerce.number().nonnegative(),
+  roomTypeIds: z.array(z.string().uuid()).default([]),
   startsAt: z.coerce.date(),
   endsAt: z.coerce.date(),
   active: z.coerce.boolean().default(true),
@@ -373,12 +381,24 @@ adminRoutes.patch('/hotel-settings', requireRole('hotel_admin', 'super_admin'), 
 
 adminRoutes.get('/bookings', async (req, res) => {
   const { rows } = await query(
-    `SELECT b.*, rt.name AS room_type_name, rt.bed_type, rt.size_sqft,
-            rt.description AS room_description, rt.hero_image_url AS room_image_url,
-            i.invoice_number, i.issued_at AS invoice_issued_at, i.pdf_url
+    `SELECT b.*,
+            coalesce(rt.name, b.room_snapshot->>'name', 'Deleted room category') AS room_type_name,
+            coalesce(rt.bed_type, b.room_snapshot->>'bed_type') AS bed_type,
+            coalesce(rt.size_sqft, nullif(b.room_snapshot->>'size_sqft', '')::int) AS size_sqft,
+            coalesce(rt.description, b.room_snapshot->>'description') AS room_description,
+            coalesce(rt.hero_image_url, b.room_snapshot->>'hero_image_url') AS room_image_url,
+            i.invoice_number, i.issued_at AS invoice_issued_at, i.pdf_url,
+            cr.status AS cancellation_status,
+            cr.reason_option AS cancellation_reason_option,
+            cr.reason_text AS cancellation_reason_text,
+            cr.refund_amount AS cancellation_refund_amount,
+            cr.admin_message AS cancellation_admin_message,
+            cr.requested_at AS cancellation_requested_at,
+            cr.reviewed_at AS cancellation_reviewed_at
      FROM bookings b
-     JOIN room_types rt ON rt.id = b.room_type_id
+     LEFT JOIN room_types rt ON rt.id = b.room_type_id
      LEFT JOIN invoices i ON i.booking_id = b.id
+     LEFT JOIN booking_cancellation_requests cr ON cr.booking_id = b.id
      WHERE b.hotel_id = $1
        AND b.status <> 'completed'
      ORDER BY b.created_at DESC
@@ -434,7 +454,16 @@ adminRoutes.post('/bookings', requireRole('hotel_admin', 'super_admin'), validat
     return rows[0]
   })
 
-  res.status(201).json({ booking })
+  let responseBooking = booking
+  if (booking.status === 'confirmed') {
+    try {
+      const receipt = await ensureBookingReceipt(booking.id)
+      responseBooking = { ...booking, invoice_number: receipt.invoice.invoice_number, invoice_issued_at: receipt.invoice.issued_at, pdf_url: receipt.invoice.pdf_url }
+    } catch (error) {
+      console.error({ message: 'Manual booking receipt failed', bookingId: booking.id, error: error.message })
+    }
+  }
+  res.status(201).json({ booking: responseBooking })
   recordActivity({
     req,
     action: 'booking_created',
@@ -515,9 +544,9 @@ adminRoutes.get('/users/:userId', async (req, res) => {
   if (!rows[0]) throw notFound('Customer user not found')
 
   const { rows: bookingRows } = await query(
-    `SELECT b.*, rt.name AS room_type_name
+    `SELECT b.*, coalesce(rt.name, b.room_snapshot->>'name', 'Deleted room category') AS room_type_name
      FROM bookings b
-     JOIN room_types rt ON rt.id = b.room_type_id
+     LEFT JOIN room_types rt ON rt.id = b.room_type_id
      WHERE b.hotel_id = $1 AND b.user_id = $2
      ORDER BY b.created_at DESC
      LIMIT 50`,
@@ -662,6 +691,98 @@ adminRoutes.delete('/bookings/:bookingId', requireRole('hotel_admin', 'super_adm
     action: 'booking_deleted',
     entityType: 'booking',
     entityId: req.params.bookingId,
+  })
+})
+
+adminRoutes.get('/cancellation-requests', async (req, res) => {
+  const { rows } = await query(
+    `SELECT cr.*,
+            b.booking_reference, b.status AS booking_status, b.check_in, b.check_out,
+            b.rooms_count, b.guest_name, b.guest_email, b.guest_phone,
+            b.total_amount, b.currency, b.created_at AS booking_created_at,
+            coalesce(rt.name, b.room_snapshot->>'name', 'Deleted room category') AS room_type_name,
+            reviewer.full_name AS reviewed_by_name
+     FROM booking_cancellation_requests cr
+     JOIN bookings b ON b.id = cr.booking_id
+     LEFT JOIN room_types rt ON rt.id = b.room_type_id
+     LEFT JOIN users reviewer ON reviewer.id = cr.reviewed_by
+     WHERE cr.hotel_id = $1
+     ORDER BY CASE cr.status WHEN 'requested' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+              cr.requested_at DESC
+     LIMIT 200`,
+    [req.hotel.id],
+  )
+  res.json({ requests: rows })
+})
+
+adminRoutes.patch('/cancellation-requests/:requestId', requireRole('hotel_admin', 'super_admin'), validate(cancellationReviewSchema), async (req, res) => {
+  const reviewed = await transaction(async (db) => {
+    const { rows } = await db.query(
+      `SELECT cr.*, b.room_type_id, b.check_in, b.check_out, b.rooms_count, b.status AS booking_status
+       FROM booking_cancellation_requests cr
+       JOIN bookings b ON b.id = cr.booking_id
+       WHERE cr.id = $1 AND cr.hotel_id = $2
+       FOR UPDATE`,
+      [req.params.requestId, req.hotel.id],
+    )
+    const request = rows[0]
+    if (!request) throw notFound('Cancellation request not found')
+    if (request.status !== 'requested') throw conflict('This cancellation request has already been reviewed.', 'cancellation_already_reviewed')
+
+    if (req.body.status === 'approved' && !['cancelled', 'failed'].includes(request.booking_status)) {
+      await db.query(
+        `UPDATE room_inventory
+         SET reserved_rooms = GREATEST(reserved_rooms - $1, 0),
+             updated_at = now()
+         WHERE hotel_id = $2
+           AND room_type_id = $3
+           AND stay_date >= $4
+           AND stay_date < $5`,
+        [request.rooms_count, req.hotel.id, request.room_type_id, request.check_in, request.check_out],
+      )
+      await db.query(
+        `UPDATE bookings
+         SET status = 'cancelled',
+             cancelled_at = now(),
+             metadata = jsonb_set(
+               coalesce(metadata, '{}'::jsonb),
+               '{manualRefund}',
+               jsonb_build_object(
+                 'amount', coalesce($2::numeric, 0),
+                 'message', coalesce($3::text, ''),
+                 'approvedAt', now(),
+                 'approvedBy', $4::uuid
+               ),
+               true
+             ),
+             updated_at = now()
+         WHERE id = $1`,
+        [request.booking_id, req.body.refundAmount || 0, req.body.adminMessage || '', req.user.id],
+      )
+    }
+
+    const { rows: updatedRows } = await db.query(
+      `UPDATE booking_cancellation_requests
+       SET status = $1,
+           refund_amount = CASE WHEN $1 = 'approved' THEN coalesce($2::numeric, 0) ELSE refund_amount END,
+           admin_message = $3,
+           reviewed_by = $4,
+           reviewed_at = now(),
+           updated_at = now()
+       WHERE id = $5 AND hotel_id = $6
+       RETURNING *`,
+      [req.body.status, req.body.refundAmount || 0, req.body.adminMessage || '', req.user.id, req.params.requestId, req.hotel.id],
+    )
+    return updatedRows[0]
+  })
+
+  res.json({ request: reviewed })
+  recordActivity({
+    req,
+    action: req.body.status === 'approved' ? 'booking_cancellation_approved' : 'booking_cancellation_rejected',
+    entityType: 'booking_cancellation_request',
+    entityId: reviewed.id,
+    metadata: { bookingId: reviewed.booking_id, refundAmount: reviewed.refund_amount },
   })
 })
 
@@ -913,33 +1034,49 @@ adminRoutes.delete('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin
       [req.hotel.id, req.params.roomTypeId],
     )
     const bookingCount = Number(bookingRows[0]?.count || 0)
-    if (bookingCount > 0) {
-      await db.query(
-        `UPDATE room_types
-         SET active = false, show_on_homepage = false, updated_at = now()
-         WHERE id = $1 AND hotel_id = $2`,
-        [req.params.roomTypeId, req.hotel.id],
-      )
-      await db.query(
-        `DELETE FROM room_inventory
-         WHERE hotel_id = $1
-           AND room_type_id = $2
-           AND stay_date >= current_date`,
-        [req.hotel.id, req.params.roomTypeId],
-      )
-      return { room, mode: 'archived', bookingCount }
-    }
 
+    await db.query(
+      `UPDATE bookings
+       SET room_snapshot = jsonb_strip_nulls(jsonb_build_object(
+             'id', $3::uuid,
+             'name', $4::text,
+             'slug', $5::text,
+             'description', $6::text,
+             'bed_type', $7::text,
+             'size_sqft', $8::int,
+             'amenities', $9::text[],
+             'amenity_items', $10::jsonb,
+             'hero_image_url', $11::text,
+             'gallery', $12::jsonb
+           )),
+           room_type_id = null,
+           updated_at = now()
+       WHERE hotel_id = $1 AND room_type_id = $2`,
+      [
+        req.hotel.id,
+        req.params.roomTypeId,
+        room.id,
+        room.name,
+        room.slug,
+        room.description,
+        room.bed_type,
+        room.size_sqft,
+        room.amenities || [],
+        JSON.stringify(room.amenity_items || []),
+        room.hero_image_url,
+        JSON.stringify(room.gallery || []),
+      ],
+    )
     await db.query('DELETE FROM media_assets WHERE hotel_id = $1 AND entity_type = $2 AND entity_id = $3', [req.hotel.id, 'room_type', req.params.roomTypeId])
     await db.query('DELETE FROM room_types WHERE id = $1 AND hotel_id = $2', [req.params.roomTypeId, req.hotel.id])
-    return { room, mode: 'deleted', bookingCount: 0 }
+    return { room, mode: 'deleted', bookingCount }
   })
 
   await syncRemovedCloudinaryMedia(req.hotel.id, collectRoomMedia(result.room), [])
   res.json({ mode: result.mode, bookingCount: result.bookingCount })
   recordActivity({
     req,
-    action: result.mode === 'deleted' ? 'room_deleted' : 'room_archived',
+    action: 'room_deleted',
     entityType: 'room_type',
     entityId: req.params.roomTypeId,
     metadata: { mode: result.mode, bookings: result.bookingCount },
@@ -1560,12 +1697,13 @@ adminRoutes.get('/offers', async (req, res) => {
 
 adminRoutes.post('/offers', requireRole('hotel_admin', 'super_admin'), validate(offerSchema), async (req, res) => {
   if (req.body.endsAt <= req.body.startsAt) throw badRequest('Offer end date must be after start date', 'invalid_offer_dates')
+  await assertOfferRoomTargets(req.hotel.id, req.body.roomTypeIds)
   const { rows } = await query(
     `INSERT INTO offers (
        hotel_id, title, description, code, discount_type, discount_value, starts_at,
-       ends_at, active, image_url, audience_type, min_completed_bookings, badge, highlight_color
+       ends_at, active, image_url, audience_type, min_completed_bookings, badge, highlight_color, room_type_ids
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::uuid[])
      RETURNING *`,
     [
       req.hotel.id,
@@ -1582,6 +1720,7 @@ adminRoutes.post('/offers', requireRole('hotel_admin', 'super_admin'), validate(
       req.body.minCompletedBookings,
       req.body.badge || '',
       req.body.highlightColor || '#f59e0b',
+      req.body.roomTypeIds || [],
     ],
   )
   await recordMediaAssets(req.hotel.id, 'offer', rows[0].id, collectOfferMedia(rows[0]), rows[0].title)
@@ -1597,6 +1736,7 @@ adminRoutes.post('/offers', requireRole('hotel_admin', 'super_admin'), validate(
 
 adminRoutes.patch('/offers/:offerId', requireRole('hotel_admin', 'super_admin'), validate(offerSchema.partial()), async (req, res) => {
   const body = req.body
+  if (body.roomTypeIds !== undefined) await assertOfferRoomTargets(req.hotel.id, body.roomTypeIds)
   const result = await transaction(async (db) => {
     const { rows: previousRows } = await db.query(
       'SELECT * FROM offers WHERE id = $1 AND hotel_id = $2 FOR UPDATE',
@@ -1618,8 +1758,9 @@ adminRoutes.patch('/offers/:offerId', requireRole('hotel_admin', 'super_admin'),
          min_completed_bookings = coalesce($11::int, min_completed_bookings),
          badge = coalesce($12, badge),
          highlight_color = coalesce($13, highlight_color),
+         room_type_ids = coalesce($14::uuid[], room_type_ids),
          updated_at = now()
-       WHERE id = $14 AND hotel_id = $15
+       WHERE id = $15 AND hotel_id = $16
        RETURNING *`,
       [
         body.title,
@@ -1635,6 +1776,7 @@ adminRoutes.patch('/offers/:offerId', requireRole('hotel_admin', 'super_admin'),
         body.minCompletedBookings,
         body.badge,
         body.highlightColor,
+        body.roomTypeIds,
         req.params.offerId,
         req.hotel.id,
       ],
@@ -1674,6 +1816,21 @@ adminRoutes.delete('/offers/:offerId', requireRole('hotel_admin', 'super_admin')
     entityId: req.params.offerId,
   })
 })
+
+async function assertOfferRoomTargets(hotelId, roomTypeIds = []) {
+  const ids = [...new Set((roomTypeIds || []).filter(Boolean))]
+  if (!ids.length) return
+  const { rows } = await query(
+    `SELECT count(*)::int AS count
+     FROM room_types
+     WHERE hotel_id = $1
+       AND id = ANY($2::uuid[])`,
+    [hotelId, ids],
+  )
+  if (Number(rows[0]?.count || 0) !== ids.length) {
+    throw badRequest('One or more selected offer rooms do not belong to this hotel.', 'invalid_offer_room_targets')
+  }
+}
 
 async function recordMediaAssets(hotelId, entityType, entityId, items, fallbackAlt = '') {
   for (const item of items.filter((media) => media.publicId && media.url)) {

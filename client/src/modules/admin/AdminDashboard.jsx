@@ -36,7 +36,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { StatusPill } from '../../components/ui/StatusPill.jsx'
 import { StayDateRangePicker } from '../../components/ui/StayDateRangePicker.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
-import { apiFetch } from '../../services/apiClient.js'
+import { apiFetch, receiptDownloadUrl } from '../../services/apiClient.js'
 import { uploadImageToCloudinary } from '../../services/cloudinaryUpload.js'
 import { logout } from '../auth/firebaseClient.js'
 import { buildTenantPath, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
@@ -49,6 +49,7 @@ const tabs = [
   { key: 'rates', Icon: IndianRupee, label: 'Rate calendar', text: 'Date-wise room pricing' },
   { key: 'create-booking', Icon: ClipboardPlus, label: 'Create booking', text: 'Manual reservations' },
   { key: 'bookings', Icon: CalendarDays, label: 'Bookings', text: 'Arrivals and history' },
+  { key: 'cancellations', Icon: CircleAlert, label: 'Cancellations', text: 'Guest cancellation requests' },
   { key: 'users', Icon: UsersRound, label: 'Users', text: 'Guest profiles' },
   { key: 'feedback', Icon: MessageSquare, label: 'Feedback', text: 'Guest messages' },
   { key: 'amenities', Icon: Sparkles, label: 'Amenities', text: 'Hotel add-ons' },
@@ -92,6 +93,7 @@ const emptyOffer = {
   code: '',
   discountType: 'percentage',
   discountValue: 10,
+  roomTypeIds: [],
   startsAt: new Date().toISOString().slice(0, 16),
   endsAt: nextMonthDateTime(),
   active: true,
@@ -137,6 +139,7 @@ export function AdminDashboard() {
     dashboard: 0,
     rooms: 0,
     bookings: 0,
+    cancellations: 0,
     users: 0,
     feedback: 0,
     amenities: 0,
@@ -175,12 +178,13 @@ export function AdminDashboard() {
   const [rateDayEditor, setRateDayEditor] = useState(null)
   const [entryDetails, setEntryDetails] = useState(null)
   const [activeUser, setActiveUser] = useState(null)
-  const [filters, setFilters] = useState({ rooms: '', bookings: '', bookingStatus: 'all', users: '', feedback: '', amenities: '', faqs: '', offers: '', offerAudience: 'all' })
+  const [filters, setFilters] = useState({ rooms: '', bookings: '', bookingStatus: 'all', cancellations: '', cancellationStatus: 'requested', users: '', feedback: '', amenities: '', faqs: '', offers: '', offerAudience: 'all' })
   const [settingsForm, setSettingsForm] = useState({ loyaltyRedemptionMinPoints: DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS })
 
   const dashboard = useAsync(() => apiFetch('/admin/dashboard'), refreshKeys.dashboard)
   const rooms = useAsync(() => apiFetch('/admin/rooms'), refreshKeys.rooms)
   const bookings = useAsync(() => apiFetch('/admin/bookings'), refreshKeys.bookings)
+  const cancellations = useAsync(() => apiFetch('/admin/cancellation-requests'), refreshKeys.cancellations)
   const users = useAsync(() => apiFetch('/admin/users'), refreshKeys.users)
   const feedback = useAsync(() => apiFetch('/admin/feedback'), refreshKeys.feedback)
   const amenities = useAsync(() => apiFetch('/admin/amenities'), refreshKeys.amenities)
@@ -193,6 +197,7 @@ export function AdminDashboard() {
   const amenityList = amenities.data?.amenities || []
   const faqList = faqs.data?.faqs || []
   const bookingList = bookings.data?.bookings || []
+  const cancellationList = cancellations.data?.requests || []
   const userList = users.data?.users || []
   const feedbackList = feedback.data?.feedback || []
   const offerList = offers.data?.offers || []
@@ -303,11 +308,11 @@ export function AdminDashboard() {
   }
 
   async function deleteRoom(room) {
-    if (!window.confirm(`Delete ${room.name} from the website? If past bookings exist, it will be archived from public sale and booking history will stay safe.`)) return
+    if (!window.confirm(`Permanently delete ${room.name}? Existing bookings keep a saved room snapshot, but the live room, images, inventory, and rate data will be removed.`)) return
     setSaving(true)
     try {
       await apiFetch(`/admin/rooms/${room.id}`, { method: 'DELETE' })
-      refresh('Room removed from the public website.', 'success', ['dashboard', 'rooms', 'inventory', 'rates'])
+      refresh('Room deleted with its inventory, rate data, and room media cleaned up.', 'success', ['dashboard', 'rooms', 'inventory', 'rates', 'bookings'])
     } catch (error) {
       setNotice({ type: 'error', message: error.message })
     } finally {
@@ -653,6 +658,7 @@ export function AdminDashboard() {
         ...offerForm,
         discountValue: Number(offerForm.discountValue || 0),
         minCompletedBookings: offerForm.audienceType === 'repeat_guest' ? Number(offerForm.minCompletedBookings || 1) : 0,
+        roomTypeIds: Array.isArray(offerForm.roomTypeIds) ? offerForm.roomTypeIds.filter(Boolean) : [],
         imageUrl: offerForm.imageUrl || '',
         code: offerForm.code || undefined,
       }
@@ -749,6 +755,25 @@ export function AdminDashboard() {
       await apiFetch(`/admin/bookings/${booking.id}`, { method: 'DELETE' })
       setBookingForm(null)
       refresh('Booking deleted and inventory released.', 'success', ['dashboard', 'bookings', 'rooms', 'inventory'])
+    } catch (error) {
+      setNotice({ type: 'error', message: error.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function reviewCancellationRequest(request, status, payload = {}) {
+    setSaving(true)
+    try {
+      await apiFetch(`/admin/cancellation-requests/${request.id}`, {
+        method: 'PATCH',
+        body: {
+          status,
+          refundAmount: payload.refundAmount ? Number(payload.refundAmount) : 0,
+          adminMessage: payload.adminMessage || '',
+        },
+      })
+      refresh(status === 'approved' ? 'Cancellation approved and marked for manual refund.' : 'Cancellation request rejected.', 'success', ['dashboard', 'bookings', 'cancellations', 'rooms', 'inventory'])
     } catch (error) {
       setNotice({ type: 'error', message: error.message })
     } finally {
@@ -997,11 +1022,20 @@ export function AdminDashboard() {
                 onCreateClick={() => changePage('create-booking')}
               />
             ) : null}
+            {activePage === 'cancellations' ? (
+              <CancellationRequestsPanel
+                requests={cancellationList}
+                filters={filters}
+                setFilters={setFilters}
+                saving={saving}
+                onReview={reviewCancellationRequest}
+              />
+            ) : null}
             {activePage === 'users' ? <UsersPanel users={userList} filters={filters} setFilters={setFilters} saving={saving} onOpen={openUserProfile} onDelete={deleteCustomer} /> : null}
             {activePage === 'feedback' ? <FeedbackPanel feedback={feedbackList} filters={filters} setFilters={setFilters} /> : null}
             {activePage === 'amenities' ? <AmenitiesPanel amenities={amenityList} form={amenityForm} setForm={setAmenityForm} showForm={showAmenityForm} setShowForm={setShowAmenityForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveAmenity} onDelete={deleteAmenity} /> : null}
             {activePage === 'faqs' ? <FaqPanel faqs={faqList} form={faqForm} setForm={setFaqForm} showForm={showFaqForm} setShowForm={setShowFaqForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveFaq} onDelete={deleteFaq} /> : null}
-            {activePage === 'offers' ? <OffersPanel offers={offerList} form={offerForm} setForm={setOfferForm} showForm={showOfferForm} setShowForm={setShowOfferForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveOffer} onDelete={deleteOffer} /> : null}
+            {activePage === 'offers' ? <OffersPanel offers={offerList} rooms={roomList} form={offerForm} setForm={setOfferForm} showForm={showOfferForm} setShowForm={setShowOfferForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveOffer} onDelete={deleteOffer} /> : null}
             {activePage === 'settings' ? <SettingsPanel form={settingsForm} setForm={setSettingsForm} saving={saving} onSave={saveSettings} /> : null}
           </div>
         </section>
@@ -1832,6 +1866,96 @@ function BookingsPanel({ bookings, filters, setFilters, saving, onEdit, onDelete
   )
 }
 
+function CancellationRequestsPanel({ requests, filters, setFilters, saving, onReview }) {
+  const [reviewForm, setReviewForm] = useState(null)
+  const filtered = filterByText(requests, filters.cancellations, ['booking_reference', 'guest_name', 'guest_email', 'guest_phone', 'room_type_name', 'reason_option', 'reason_text', 'status'])
+    .filter((request) => filters.cancellationStatus === 'all' || request.status === filters.cancellationStatus)
+
+  return (
+    <section className="grid gap-3 sm:gap-6">
+      <div className="panel overflow-hidden">
+        <PanelHeader
+          icon={CircleAlert}
+          title="Cancellation requests"
+          action={<CancellationFilters filters={filters} setFilters={setFilters} />}
+        />
+        {filtered.length ? (
+          <div className="grid gap-3 p-3 sm:p-5">
+            {filtered.map((request) => (
+              <article key={request.id} className="rounded-lg border border-white/70 bg-white/70 p-4 shadow-soft backdrop-blur">
+                <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="break-words text-xl font-black text-charcoal">{request.booking_reference}</h3>
+                      <StatusPill status={request.status} />
+                    </div>
+                    <p className="mt-1 text-sm font-semibold text-stone-500">{request.guest_name} / {request.room_type_name}</p>
+                    <p className="mt-1 text-xs font-bold uppercase tracking-[0.1em] text-stone-400">Requested {formatDateTime(request.requested_at)}</p>
+                  </div>
+                  <div className="grid gap-2 text-sm md:min-w-[220px]">
+                    <Line label="Booking total" value={money(request.total_amount)} />
+                    <Line label="Stay" value={`${formatDate(request.check_in)} to ${formatDate(request.check_out)}`} />
+                    <Line label="Phone" value={request.guest_phone || '-'} />
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-[1fr_280px]">
+                  <div className="rounded-md bg-ivory p-3 text-sm">
+                    <p className="font-black text-charcoal">{request.reason_option}</p>
+                    {request.reason_text ? <p className="mt-2 font-semibold leading-6 text-stone-600">{request.reason_text}</p> : null}
+                    {request.admin_message ? <p className="mt-3 rounded-md bg-white p-3 font-semibold leading-6 text-stone-600">Admin message: {request.admin_message}</p> : null}
+                    {request.status === 'approved' ? <p className="mt-3 font-black text-emerald-800">Manual refund marked: {money(request.refund_amount)}</p> : null}
+                  </div>
+                  {request.status === 'requested' ? (
+                    <div className="grid gap-2 content-start">
+                      <button className="btn-primary !min-h-10" type="button" disabled={saving} onClick={() => setReviewForm({ request, status: 'approved', refundAmount: '', adminMessage: '' })}>Approve</button>
+                      <button className="btn-secondary !min-h-10 text-red-700" type="button" disabled={saving} onClick={() => setReviewForm({ request, status: 'rejected', refundAmount: '', adminMessage: '' })}>Reject</button>
+                    </div>
+                  ) : (
+                    <div className="rounded-md bg-bone p-3 text-sm font-semibold text-stone-600">
+                      Reviewed {formatDateTime(request.reviewed_at)}
+                    </div>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : <EmptyState title="No cancellation requests" text="Guest cancellation requests will appear here for review." />}
+      </div>
+      {reviewForm ? <CancellationReviewModal form={reviewForm} setForm={setReviewForm} saving={saving} onSubmit={onReview} onClose={() => setReviewForm(null)} /> : null}
+    </section>
+  )
+}
+
+function CancellationReviewModal({ form, setForm, saving, onSubmit, onClose }) {
+  const approve = form.status === 'approved'
+  return (
+    <Modal onClose={onClose} width="max-w-xl">
+      <form
+        className="p-5"
+        onSubmit={(event) => {
+          event.preventDefault()
+          onSubmit(form.request, form.status, form)
+          onClose()
+        }}
+      >
+        <p className="eyebrow">{approve ? 'Approve cancellation' : 'Reject cancellation'}</p>
+        <h2 className="mt-1 break-words text-2xl font-black text-charcoal">{form.request.booking_reference}</h2>
+        <p className="mt-2 text-sm font-semibold leading-6 text-stone-600">{form.request.reason_option}{form.request.reason_text ? ` / ${form.request.reason_text}` : ''}</p>
+        <div className="mt-5 grid gap-4">
+          {approve ? <Field label="Manual refund amount"><input className="input" type="number" min="0" value={form.refundAmount} onChange={(event) => setForm({ ...form, refundAmount: event.target.value })} /></Field> : null}
+          <Field label={approve ? 'Message to guest' : 'Reason / message to guest'}>
+            <textarea className="input min-h-28 py-3" value={form.adminMessage} onChange={(event) => setForm({ ...form, adminMessage: event.target.value })} placeholder={approve ? 'Example: Your cancellation is approved. Refund will be processed manually.' : 'Example: This booking is inside the non-refundable window.'} />
+          </Field>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto]">
+          <button className={approve ? 'btn-primary' : 'btn-secondary text-red-700'} disabled={saving} type="submit">{saving ? 'Saving...' : approve ? 'Approve request' : 'Reject request'}</button>
+          <button className="btn-secondary" type="button" onClick={onClose}>Close</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
 function UsersPanel({ users, filters, setFilters, saving, onOpen, onDelete }) {
   const filtered = filterByText(users, filters.users, ['full_name', 'email', 'phone', 'profile'])
   return (
@@ -2055,7 +2179,7 @@ function FaqPanel({ faqs, form, setForm, showForm, setShowForm, filters, setFilt
   )
 }
 
-function OffersPanel({ offers, form, setForm, showForm, setShowForm, filters, setFilters, saving, onSave, onDelete }) {
+function OffersPanel({ offers, rooms, form, setForm, showForm, setShowForm, filters, setFilters, saving, onSave, onDelete }) {
   const filtered = filterByText(offers, filters.offers, ['title', 'description', 'code', 'badge', 'audience_type', 'discount_type', 'discount_value']).filter((offer) => filters.offerAudience === 'all' || offer.audience_type === filters.offerAudience)
   const previewSubtotal = 10000
   const previewDiscount = offerPreviewDiscount({ discount_type: form.discountType, discount_value: form.discountValue }, previewSubtotal)
@@ -2090,6 +2214,7 @@ function OffersPanel({ offers, form, setForm, showForm, setShowForm, filters, se
               <Field label="Offer image URL"><input className="input" type="url" value={form.imageUrl} onChange={(event) => setForm({ ...form, imageUrl: event.target.value })} placeholder="https://..." /></Field>
               <label className="mt-6 flex min-h-12 items-center gap-3 rounded-md border border-mist bg-white px-3 text-sm font-bold"><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /> Active</label>
             </div>
+            <OfferRoomTargetSelector rooms={rooms} value={form.roomTypeIds || []} onChange={(roomTypeIds) => setForm({ ...form, roomTypeIds })} />
             <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
               <p className="font-extrabold text-amber-900">Calculation preview</p>
               <p className="mt-1 font-semibold leading-6 text-stone-600">On a Rs {previewSubtotal.toLocaleString('en-IN')} room subtotal, this offer saves Rs {previewDiscount.toLocaleString('en-IN')}. Tax is calculated after discount.</p>
@@ -2139,6 +2264,7 @@ function OffersPanel({ offers, form, setForm, showForm, setShowForm, filters, se
                   <span>Saves Rs {offerPreviewDiscount(offer, 10000).toLocaleString('en-IN')} on Rs 10,000 before tax</span>
                   {offer.code ? <span>Code: {offer.code}</span> : null}
                   {offer.audience_type === 'repeat_guest' ? <span>Shows after {offer.min_completed_bookings} booking(s)</span> : null}
+                  <span>{offerRoomTargetLabel(offer, rooms)}</span>
                   <span>{formatDate(offer.starts_at)} to {formatDate(offer.ends_at)}</span>
                 </div>
                 <div className="mt-auto flex gap-2 pt-4">
@@ -2158,6 +2284,7 @@ function OffersPanel({ offers, form, setForm, showForm, setShowForm, filters, se
                       badge: offer.badge || '',
                       highlightColor: offer.highlight_color || '#f59e0b',
                       imageUrl: offer.image_url || '',
+                      roomTypeIds: offer.room_type_ids || [],
                     })
                     setShowForm(true)
                   }}><Pencil size={16} /> Edit</button>
@@ -2167,6 +2294,49 @@ function OffersPanel({ offers, form, setForm, showForm, setShowForm, filters, se
             ))}
           </div>
         ) : <EmptyState title="No offers found" text="Create general or repeat-guest offers for the hotel website." />}
+      </div>
+    </section>
+  )
+}
+
+function OfferRoomTargetSelector({ rooms = [], value = [], onChange }) {
+  const normalizedValue = Array.isArray(value) ? value.filter(Boolean) : []
+  const selected = new Set(normalizedValue)
+  const allRoomsMode = !normalizedValue.length
+  const selectedRooms = rooms.filter((room) => selected.has(room.id))
+  const toggle = (roomId) => {
+    const next = new Set(normalizedValue)
+    if (next.has(roomId)) next.delete(roomId)
+    else next.add(roomId)
+    onChange(Array.from(next))
+  }
+
+  return (
+    <section className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3">
+      <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-emerald-700">Eligible rooms</p>
+          <p className="mt-1 text-sm font-semibold leading-6 text-stone-600">Select room categories to limit this offer. Leave all unchecked only when the offer should show on every room.</p>
+        </div>
+        <button className="btn-secondary !min-h-10 !px-3" type="button" onClick={() => onChange([])}>Use all rooms</button>
+      </div>
+      {rooms.length ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {rooms.map((room) => (
+            <label key={room.id} className={`flex min-h-12 items-center gap-3 rounded-md border px-3 text-sm font-bold transition ${selected.has(room.id) ? 'border-emerald-400 bg-white text-charcoal ring-2 ring-emerald-200' : 'border-emerald-100 bg-white/70 text-stone-600'}`}>
+              <input type="checkbox" checked={selected.has(room.id)} onChange={() => toggle(room.id)} />
+              <span className="min-w-0 truncate">{room.name}</span>
+            </label>
+          ))}
+        </div>
+      ) : <p className="mt-3 rounded-md bg-white p-3 text-sm font-semibold text-stone-500">Add room categories before limiting offers by room.</p>}
+      <div className="mt-3 rounded-md bg-white/80 p-3">
+        <p className="text-xs font-black uppercase tracking-[0.1em] text-emerald-800">{allRoomsMode ? 'Currently applies to all rooms' : `Applies to ${normalizedValue.length} room category${normalizedValue.length === 1 ? '' : 'ies'}`}</p>
+        {!allRoomsMode ? (
+          <p className="mt-1 text-sm font-semibold leading-6 text-stone-600">
+            {selectedRooms.length ? selectedRooms.map((room) => room.name).join(', ') : 'Selected room categories will be validated when you save.'}
+          </p>
+        ) : null}
       </div>
     </section>
   )
@@ -2228,12 +2398,13 @@ function BookingSection({ title, bookings, saving, onEdit, onDelete }) {
       {bookings.length ? (
         <div className="grid gap-3 p-3 sm:p-5 lg:gap-0 lg:divide-y lg:divide-white/60 lg:p-0">
           {bookings.map((booking) => (
-            <article key={booking.id} className="grid gap-3 rounded-md border border-white/70 bg-white/65 p-3 shadow-sm backdrop-blur lg:rounded-none lg:border-0 lg:bg-transparent lg:p-4 lg:shadow-none lg:grid-cols-[1fr_170px_120px_140px_100px] lg:items-center">
+            <article key={booking.id} className="grid gap-3 rounded-md border border-white/70 bg-white/65 p-3 shadow-sm backdrop-blur lg:rounded-none lg:border-0 lg:bg-transparent lg:p-4 lg:shadow-none lg:grid-cols-[1fr_180px_150px_120px_140px_100px] lg:items-center">
               <div>
                 <p className="font-bold">{booking.guest_name}</p>
                 <p className="text-sm text-stone-500">{booking.room_type_name} / {booking.booking_reference}</p>
               </div>
               <p className="text-sm font-semibold text-stone-600">{formatDate(booking.check_in)} to {formatDate(booking.check_out)}</p>
+              <p className="text-xs font-bold uppercase leading-5 tracking-[0.08em] text-stone-400">{formatDateTime(booking.confirmed_at || booking.created_at)}</p>
               <StatusPill status={booking.status} />
               <p className="font-extrabold">Rs {Number(booking.total_amount).toLocaleString('en-IN')}</p>
               <div className="grid grid-cols-2 gap-2 lg:flex">
@@ -2361,6 +2532,7 @@ function BookingEditor({ form, setForm, saving, onSubmit, onDelete, onClose }) {
   const metadata = form.metadata || {}
   const pricing = metadata.pricing || {}
   const paymentPlan = metadata.paymentPlan || {}
+  const gstClaim = metadata.gstClaim || form.gst_claim || {}
   const selectedAmenities = Array.isArray(metadata.selectedAmenities) ? metadata.selectedAmenities : []
   const taxHalf = Number(form.tax_amount || 0) / 2
   return (
@@ -2373,7 +2545,7 @@ function BookingEditor({ form, setForm, saving, onSubmit, onDelete, onClose }) {
             <p className="mt-1 text-sm font-semibold text-stone-500">{form.room_type_name} / {formatDate(form.check_in)} to {formatDate(form.check_out)}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {form.pdf_url ? <a className="btn-primary !min-h-10 !px-3" href={form.pdf_url} download={bookingReceiptFileName(form)}><Download size={16} /> Receipt</a> : <span className="inline-flex min-h-10 items-center rounded-md border border-mist bg-white px-3 text-sm font-bold text-stone-400">Receipt preparing</span>}
+            {receiptDownloadUrl(form) ? <a className="btn-primary !min-h-10 !px-3" href={receiptDownloadUrl(form)} download={bookingReceiptFileName(form)}><Download size={16} /> Receipt</a> : <span className="inline-flex min-h-10 items-center rounded-md border border-mist bg-white px-3 text-sm font-bold text-stone-400">Receipt preparing</span>}
             <button className="btn-secondary !min-h-10 !px-3" type="button" onClick={onClose}>Close</button>
           </div>
         </div>
@@ -2399,8 +2571,27 @@ function BookingEditor({ form, setForm, saving, onSubmit, onDelete, onClose }) {
                 <BookingInfoLine label="Bed type" value={form.bed_type || 'Premium bedding'} />
                 <BookingInfoLine label="Size" value={form.size_sqft ? `${form.size_sqft} sq ft` : '-'} />
                 <BookingInfoLine label="Dates" value={`${formatDate(form.check_in)} to ${formatDate(form.check_out)}`} />
+                <BookingInfoLine label="Booking time" value={formatDateTime(form.confirmed_at || form.created_at)} />
               </BookingInfoCard>
             </div>
+
+            {form.cancellation_status ? (
+              <BookingInfoCard title="Cancellation request">
+                <BookingInfoLine label="Status" value={form.cancellation_status} />
+                <BookingInfoLine label="Reason" value={form.cancellation_reason_option || '-'} />
+                <BookingInfoLine label="Requested" value={formatDateTime(form.cancellation_requested_at)} />
+                {form.cancellation_refund_amount !== null && form.cancellation_refund_amount !== undefined ? <BookingInfoLine label="Manual refund" value={money(form.cancellation_refund_amount)} /> : null}
+                {form.cancellation_admin_message ? <BookingInfoLine label="Admin message" value={form.cancellation_admin_message} /> : null}
+              </BookingInfoCard>
+            ) : null}
+
+            {gstClaim.enabled ? (
+              <BookingInfoCard title="GST claim details">
+                <BookingInfoLine label="Company" value={gstClaim.companyName || '-'} />
+                <BookingInfoLine label="GST number" value={gstClaim.gstNumber || '-'} />
+                <BookingInfoLine label="Address" value={gstClaim.companyAddress || '-'} />
+              </BookingInfoCard>
+            ) : null}
 
             <BookingInfoCard title="Editable guest details">
               <div className="grid gap-4 sm:grid-cols-2">
@@ -2556,6 +2747,20 @@ function BookingFilters({ filters, setFilters }) {
         <option value="payment_pending">Payment pending</option>
         <option value="cancelled">Cancelled</option>
         <option value="failed">Failed</option>
+      </select>
+    </div>
+  )
+}
+
+function CancellationFilters({ filters, setFilters }) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-[220px_170px]">
+      <SearchBox value={filters.cancellations} onChange={(value) => setFilters({ ...filters, cancellations: value })} placeholder="Search requests" />
+      <select className="input h-10" value={filters.cancellationStatus} onChange={(event) => setFilters({ ...filters, cancellationStatus: event.target.value })}>
+        <option value="requested">Requested</option>
+        <option value="approved">Approved</option>
+        <option value="rejected">Rejected</option>
+        <option value="all">All statuses</option>
       </select>
     </div>
   )
@@ -2722,6 +2927,7 @@ function activePageTitle(page) {
     rates: 'Rate calendar',
     'create-booking': 'Create manual booking',
     bookings: 'Booking management',
+    cancellations: 'Cancellation requests',
     users: 'User management',
     feedback: 'Feedback inbox',
     amenities: 'Amenity catalog',
@@ -2823,9 +3029,23 @@ function offerPreviewDiscount(offer, subtotal) {
   return Math.round((Math.min(discount, base) + Number.EPSILON) * 100) / 100
 }
 
+function offerRoomTargetLabel(offer, rooms = []) {
+  const ids = Array.isArray(offer?.room_type_ids) ? offer.room_type_ids : []
+  if (!ids.length) return 'All rooms'
+  const names = ids.map((id) => rooms.find((room) => room.id === id)?.name).filter(Boolean)
+  if (!names.length) return `${ids.length} selected room${ids.length === 1 ? '' : 's'}`
+  if (names.length <= 2) return names.join(', ')
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2} more`
+}
+
 function formatDate(value) {
   if (!value) return 'TBA'
   return new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value))
+}
+
+function formatDateTime(value) {
+  if (!value) return 'Not recorded'
+  return new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }
 
 function startOfMonth(date) {

@@ -50,6 +50,7 @@ export function HotelExperience() {
   const { hotel, rooms, amenities = [] } = data
   const faqs = data.faqs || []
   const offers = data.offers || []
+  const allRoomOffers = offers.filter(isAllRoomOffer)
   const heroImages = getMediaUrls(hotel.branding?.heroImages)
   const showcaseImages = getMediaUrls(hotel.branding?.showcaseImages || [hotel.branding?.showcaseImageUrl].filter(Boolean)).slice(0, 3)
   const heroImage = heroImages[0] || hotel.hero_image_url || fallbackHotelImage
@@ -120,7 +121,7 @@ export function HotelExperience() {
 
       <div className="relative bg-white">
         <section id="offers" className="container-page pt-10 scroll-mt-24">
-          <OfferShowcase offers={offers} bookingUrl={bookingUrl} />
+          <OfferShowcase offers={allRoomOffers} hasRoomSpecificOffers={offers.length > allRoomOffers.length} bookingUrl={bookingUrl} />
         </section>
 
         <section id="rooms" className="container-page section-pad scroll-mt-24">
@@ -134,7 +135,7 @@ export function HotelExperience() {
           </div>
           {homepageRooms.length ? (
             <Stagger className="grid gap-4">
-              {homepageRooms.map((room) => <RoomShowcase key={room.id} room={room} bookingUrl={bookingUrl} offers={offers} />)}
+              {homepageRooms.map((room) => <RoomShowcase key={room.id} room={room} bookingUrl={bookingUrl} offers={offersForRoom(offers, room.id)} />)}
             </Stagger>
           ) : (
             <FadeIn className="panel p-8 text-center">
@@ -222,7 +223,7 @@ function premiumHotelSummary(hotel) {
   return raw
 }
 
-function OfferShowcase({ offers, bookingUrl }) {
+function OfferShowcase({ offers, hasRoomSpecificOffers = false, bookingUrl }) {
   const visibleOffers = offers.slice(0, 8)
   if (!visibleOffers.length) {
     return (
@@ -230,7 +231,9 @@ function OfferShowcase({ offers, bookingUrl }) {
         <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amberline via-yellow-600/55 to-charcoal" />
         <p className="eyebrow">Offers</p>
         <h2 className="mt-2 text-3xl font-black text-charcoal md:text-4xl">Direct booking benefits</h2>
-        <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-stone-600">Hotel offers will appear here as soon as the team publishes them.</p>
+        <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-stone-600">
+          {hasRoomSpecificOffers ? 'Room-specific offers are shown below on their eligible room categories.' : 'Hotel offers will appear here as soon as the team publishes them.'}
+        </p>
         <Link to={bookingUrl} className="btn-primary mt-5 w-full sm:w-auto"><CalendarDays size={18} /> Book stay</Link>
       </FadeIn>
     )
@@ -243,7 +246,9 @@ function OfferShowcase({ offers, bookingUrl }) {
           <div>
             <p className="eyebrow">Live offers</p>
             <h2 className="mt-2 text-3xl font-black text-charcoal md:text-4xl">Book direct benefits</h2>
-            <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-stone-600">Select an offer before choosing your room. The booking page will show the discount calculation before payment.</p>
+            <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-stone-600">
+              These offers apply to every room. Room-specific offers appear on the eligible room categories below.
+            </p>
           </div>
           <Link to={bookingUrl} className="btn-dark shrink-0"><CalendarDays size={18} /> Book stay</Link>
         </div>
@@ -282,6 +287,22 @@ function formatOfferValue(offer) {
   const value = Number(offer.discount_value || 0)
   if (offer.discount_type === 'percentage') return `${value}% off`
   return `Rs ${value.toLocaleString('en-IN')} off`
+}
+
+function isAllRoomOffer(offer) {
+  const roomTypeIds = Array.isArray(offer?.room_type_ids) ? offer.room_type_ids : []
+  return roomTypeIds.length === 0
+}
+
+function offerAppliesToRoom(offer, roomTypeId) {
+  if (!offer) return false
+  if (isAllRoomOffer(offer) || !roomTypeId) return true
+  const roomTypeIds = Array.isArray(offer.room_type_ids) ? offer.room_type_ids : []
+  return roomTypeIds.includes(roomTypeId)
+}
+
+function offersForRoom(offers = [], roomTypeId = '') {
+  return offers.filter((offer) => offerAppliesToRoom(offer, roomTypeId))
 }
 
 function appendQueryParam(path, key, value) {

@@ -6,6 +6,17 @@ const PUBLIC_GET_CACHE_MS = 30_000
 const getCache = new Map()
 const inFlightGets = new Map()
 
+export function publicApiUrl(path) {
+  const base = new URL(API_BASE_URL)
+  return new URL(path.startsWith('/') ? path : `/${path}`, `${base.origin}/`).toString()
+}
+
+export function receiptDownloadUrl(booking) {
+  const invoiceNumber = booking?.invoice_number || (booking?.booking_reference ? `INV-${booking.booking_reference}` : '')
+  if (invoiceNumber) return publicApiUrl(`/receipts/${encodeURIComponent(invoiceNumber)}.pdf`)
+  return booking?.pdf_url || ''
+}
+
 function withTenant(url) {
   const tenant = resolveTenantFromLocation()
   const parsed = new URL(`${API_BASE_URL}${url}`)

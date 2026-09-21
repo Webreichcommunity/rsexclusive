@@ -25,7 +25,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { StatusPill } from '../../components/ui/StatusPill.jsx'
 import { useAuth } from '../auth/authContext.js'
 import { useAsync } from '../../hooks/useAsync.js'
-import { apiFetch } from '../../services/apiClient.js'
+import { apiFetch, receiptDownloadUrl } from '../../services/apiClient.js'
 import { useAppUser } from '../auth/useAppUser.js'
 import { logout } from '../auth/firebaseClient.js'
 import { buildHotelUrl, buildTenantPath, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
@@ -36,6 +36,14 @@ const profileOptions = [
   { avatar: 'avatar-transgender', gender: 'transgender', label: 'Transgender', Icon: Accessibility },
 ]
 const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
+const cancellationReasons = [
+  'Change in travel plan',
+  'Booked wrong dates',
+  'Found another accommodation',
+  'Medical or family emergency',
+  'Payment or budget issue',
+  'Other',
+]
 
 export function AccountPage() {
   const { isAuthenticated, firebaseUser, loading: authLoading } = useAuth()
@@ -90,7 +98,7 @@ export function AccountPage() {
   useEffect(() => {
     if (!selectedBooking) return
     const latest = bookings.find((booking) => booking.booking_reference === selectedBooking.booking_reference)
-    if (latest && latest.pdf_url !== selectedBooking.pdf_url) setSelectedBooking(latest)
+    if (latest && JSON.stringify(latest) !== JSON.stringify(selectedBooking)) setSelectedBooking(latest)
   }, [bookings, selectedBooking])
 
   async function saveProfile(event) {
@@ -207,6 +215,7 @@ export function AccountPage() {
                     <p className="truncate text-2xl font-semibold">{booking.hotel_name}</p>
                     <p className="mt-1 truncate text-sm text-stone-500">{booking.room_type_name} / {booking.booking_reference}</p>
                     <p className="mt-2 text-xs font-bold uppercase tracking-[0.12em] text-stone-400">{booking.nights} night{Number(booking.nights) === 1 ? '' : 's'} / {booking.rooms_count} room{Number(booking.rooms_count) === 1 ? '' : 's'}</p>
+                    <p className="mt-1 text-xs font-bold uppercase tracking-[0.1em] text-stone-400">Booked {formatDateTime(booking.confirmed_at || booking.created_at)}</p>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-[135px_110px_minmax(0,1fr)] sm:items-center">
                     <p className="text-sm font-semibold leading-6 text-stone-600">{formatDate(booking.check_in)}<br />{formatDate(booking.check_out)}</p>
@@ -218,7 +227,7 @@ export function AccountPage() {
                     </div>
                     <div className="grid gap-2 sm:col-span-3 sm:grid-cols-2">
                       <button className="btn-primary !min-h-10 !px-3" type="button" onClick={() => setSelectedBooking(booking)}><Eye size={16} /> Open</button>
-                      {booking.pdf_url ? <a className="btn-secondary !min-h-10 !px-3" href={booking.pdf_url} download={receiptFileName(booking)}><Download size={16} /> Receipt</a> : <span className="inline-flex min-h-10 items-center justify-center rounded-md border border-stone-200 bg-stone-50 px-3 text-sm font-semibold text-stone-400">Preparing</span>}
+                      {receiptDownloadUrl(booking) ? <a className="btn-secondary !min-h-10 !px-3" href={receiptDownloadUrl(booking)} download={receiptFileName(booking)}><Download size={16} /> Receipt</a> : <span className="inline-flex min-h-10 items-center justify-center rounded-md border border-stone-200 bg-stone-50 px-3 text-sm font-semibold text-stone-400">Preparing</span>}
                     </div>
                   </div>
                 </StaggerItem>
@@ -245,7 +254,23 @@ export function AccountPage() {
           onClose={() => setShowProfileModal(false)}
         />
       ) : null}
-      {selectedBooking ? <BookingDetailsModal booking={selectedBooking} onClose={closeBookingDetails} /> : null}
+      {selectedBooking ? (
+        <BookingDetailsModal
+          booking={selectedBooking}
+          onCancellationRequested={(request) => {
+            setSelectedBooking((current) => current ? {
+              ...current,
+              cancellation_request_id: request.id,
+              cancellation_status: request.status,
+              cancellation_reason_option: request.reason_option,
+              cancellation_reason_text: request.reason_text,
+              cancellation_requested_at: request.requested_at,
+            } : current)
+            setBookingRefreshKey((value) => value + 1)
+          }}
+          onClose={closeBookingDetails}
+        />
+      ) : null}
     </main>
   )
 }
@@ -303,13 +328,33 @@ function ProfileModal({ form, setForm, email, status, saving, onSave, onClose })
   )
 }
 
-function BookingDetailsModal({ booking, onClose }) {
+function BookingDetailsModal({ booking, onCancellationRequested, onClose }) {
   const metadata = booking.metadata || {}
   const pricing = metadata.pricing || {}
   const paymentPlan = metadata.paymentPlan || {}
+  const gstClaim = metadata.gstClaim || booking.gst_claim || {}
   const selectedAmenities = Array.isArray(metadata.selectedAmenities) ? metadata.selectedAmenities : []
   const taxAmount = Number(booking.tax_amount || 0)
   const taxHalf = taxAmount / 2
+  const [cancelForm, setCancelForm] = useState({ reasonOption: cancellationReasons[0], reasonText: '', loading: false, error: '', success: '' })
+  const canRequestCancellation = ['confirmed', 'payment_pending', 'pending'].includes(booking.status) && !booking.cancellation_status
+
+  async function requestCancellation(event) {
+    event.preventDefault()
+    setCancelForm((current) => ({ ...current, loading: true, error: '', success: '' }))
+    try {
+      const payload = {
+        reasonOption: cancelForm.reasonOption,
+        reasonText: cancelForm.reasonOption === 'Other' ? cancelForm.reasonText : cancelForm.reasonText || undefined,
+      }
+      const response = await apiFetch(`/me/bookings/${booking.booking_reference}/cancellation-requests`, { method: 'POST', body: payload })
+      setCancelForm((current) => ({ ...current, loading: false, success: 'Cancellation request sent to the hotel.' }))
+      onCancellationRequested?.(response.request)
+    } catch (error) {
+      setCancelForm((current) => ({ ...current, loading: false, error: error.message }))
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-end bg-charcoal/55 p-3 backdrop-blur-sm md:place-items-center" onMouseDown={onClose}>
       <div className="max-h-[94vh] w-full max-w-6xl overflow-y-auto rounded-lg border border-white/60 bg-ivory shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
@@ -320,7 +365,7 @@ function BookingDetailsModal({ booking, onClose }) {
             <p className="mt-1 text-sm font-semibold text-white/65">{booking.booking_reference} / {booking.room_type_name}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {booking.pdf_url ? <a className="btn-primary !min-h-10 !px-3" href={booking.pdf_url} download={receiptFileName(booking)}><Download size={16} /> Download receipt</a> : <span className="inline-flex min-h-10 items-center rounded-md border border-white/20 px-3 text-sm font-bold text-white/55">Receipt preparing</span>}
+            {receiptDownloadUrl(booking) ? <a className="btn-primary !min-h-10 !px-3" href={receiptDownloadUrl(booking)} download={receiptFileName(booking)}><Download size={16} /> Download receipt</a> : <span className="inline-flex min-h-10 items-center rounded-md border border-white/20 px-3 text-sm font-bold text-white/55">Receipt preparing</span>}
             <button type="button" className="grid h-10 w-10 place-items-center rounded-md border border-white/20 bg-white/10" onClick={onClose} aria-label="Close booking details"><X size={18} /></button>
           </div>
         </div>
@@ -346,8 +391,27 @@ function BookingDetailsModal({ booking, onClose }) {
                 <DetailLine label="Bed type" value={booking.bed_type || 'Premium bedding'} />
                 <DetailLine label="Size" value={booking.size_sqft ? `${booking.size_sqft} sq ft` : '-'} />
                 <DetailLine label="Stay" value={`${booking.nights} night${Number(booking.nights) === 1 ? '' : 's'}`} />
+                <DetailLine label="Booking time" value={formatDateTime(booking.confirmed_at || booking.created_at)} />
               </DetailBlock>
             </div>
+
+            {booking.cancellation_status ? (
+              <DetailBlock title="Cancellation request">
+                <DetailLine label="Status" value={booking.cancellation_status} />
+                <DetailLine label="Reason" value={booking.cancellation_reason_option || '-'} />
+                <DetailLine label="Requested" value={formatDateTime(booking.cancellation_requested_at)} />
+                {booking.cancellation_refund_amount !== null && booking.cancellation_refund_amount !== undefined ? <DetailLine label="Manual refund" value={money(booking.currency, booking.cancellation_refund_amount)} /> : null}
+                {booking.cancellation_admin_message ? <p className="text-sm font-semibold leading-7 text-stone-600">{booking.cancellation_admin_message}</p> : null}
+              </DetailBlock>
+            ) : null}
+
+            {gstClaim.enabled ? (
+              <DetailBlock title="GST claim details">
+                <DetailLine label="Company" value={gstClaim.companyName || '-'} />
+                <DetailLine label="GST number" value={gstClaim.gstNumber || '-'} />
+                <DetailLine label="Address" value={gstClaim.companyAddress || '-'} />
+              </DetailBlock>
+            ) : null}
 
             {booking.room_description ? (
               <DetailBlock title="Room description">
@@ -386,6 +450,30 @@ function BookingDetailsModal({ booking, onClose }) {
               </div>
             </div>
           </aside>
+        </div>
+        <div className="border-t border-mist bg-white/70 p-4 sm:p-5">
+          {canRequestCancellation ? (
+            <form className="grid gap-4 rounded-lg border border-red-100 bg-red-50/70 p-4" onSubmit={requestCancellation}>
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.14em] text-red-700">Cancel booking request</p>
+                <p className="mt-1 text-sm font-semibold leading-6 text-red-900/75">The hotel will review this request and share any manual refund amount.</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <Field label="Reason">
+                  <select className="input" value={cancelForm.reasonOption} onChange={(event) => setCancelForm({ ...cancelForm, reasonOption: event.target.value })}>
+                    {cancellationReasons.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
+                  </select>
+                </Field>
+                {cancelForm.reasonOption === 'Other' ? <Field label="Other reason"><input className="input" value={cancelForm.reasonText} onChange={(event) => setCancelForm({ ...cancelForm, reasonText: event.target.value })} required /></Field> : null}
+              </div>
+              {cancelForm.reasonOption !== 'Other' ? <Field label="Message (optional)"><textarea className="input min-h-20 py-3" value={cancelForm.reasonText} onChange={(event) => setCancelForm({ ...cancelForm, reasonText: event.target.value })} /></Field> : null}
+              {cancelForm.error ? <p className="rounded-md bg-white p-3 text-sm font-semibold text-red-700">{cancelForm.error}</p> : null}
+              {cancelForm.success ? <p className="rounded-md bg-white p-3 text-sm font-semibold text-emerald-700">{cancelForm.success}</p> : null}
+              <button className="btn-secondary w-full text-red-700 sm:w-fit" disabled={cancelForm.loading} type="submit">{cancelForm.loading ? 'Sending...' : 'Send cancellation request'}</button>
+            </form>
+          ) : booking.cancellation_status ? null : (
+            <p className="rounded-md bg-bone p-3 text-sm font-semibold text-stone-500">This booking cannot be cancelled from the account panel.</p>
+          )}
         </div>
       </div>
     </div>
@@ -480,6 +568,11 @@ function receiptFileName(booking) {
 function formatDate(value) {
   if (!value) return 'TBA'
   return new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value))
+}
+
+function formatDateTime(value) {
+  if (!value) return 'Not recorded'
+  return new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }
 
 function firstName(value) {

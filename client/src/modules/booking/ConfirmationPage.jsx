@@ -3,7 +3,7 @@ import { CheckCircle2, Download, ReceiptText } from 'lucide-react'
 import { FadeIn, Stagger, StaggerItem } from '../../components/ui/Motion.jsx'
 import { LoadingState } from '../../components/ui/LoadingState.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
-import { apiFetch } from '../../services/apiClient.js'
+import { apiFetch, receiptDownloadUrl } from '../../services/apiClient.js'
 import { buildTenantPath, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
 
 export function ConfirmationPage() {
@@ -54,8 +54,8 @@ export function ConfirmationPage() {
 
         <div className="flex flex-col gap-3 border-t border-mist p-5 sm:flex-row sm:justify-center">
           <Link to={buildTenantPath('/account', tenantMode)} className="btn-primary"><ReceiptText size={18} /> View booking</Link>
-          {booking?.pdf_url ? (
-            <a href={booking.pdf_url} className="btn-secondary"><Download size={18} /> Download receipt</a>
+          {receiptDownloadUrl(booking) ? (
+            <a href={receiptDownloadUrl(booking)} className="btn-secondary"><Download size={18} /> Download receipt</a>
           ) : (
             <span className="btn-secondary pointer-events-none opacity-70"><Download size={18} /> Receipt preparing</span>
           )}

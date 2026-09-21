@@ -10,6 +10,7 @@ import { ImageLightbox } from '../../components/ui/ImageLightbox.jsx'
 import { StayDateRangePicker } from '../../components/ui/StayDateRangePicker.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { useAuth } from '../auth/authContext.js'
+import { useAppUser } from '../auth/useAppUser.js'
 import { apiFetch } from '../../services/apiClient.js'
 import { buildTenantPath, getSavedTenantKey, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
 
@@ -72,6 +73,7 @@ export function BookingPage() {
   const location = useLocation()
   const [params, setParams] = useSearchParams()
   const { isAuthenticated, firebaseUser, loading: authLoading } = useAuth()
+  const appUser = useAppUser()
   const [defaultCheckIn, defaultCheckOut] = defaultDates()
   const [form, setForm] = useState({
     checkIn: queryValue(params, 'checkIn', defaultCheckIn),
@@ -82,6 +84,12 @@ export function BookingPage() {
     guestName: '',
     guestEmail: '',
     guestPhone: '',
+    gstClaim: {
+      enabled: false,
+      companyName: '',
+      gstNumber: '',
+      companyAddress: '',
+    },
   })
   const [availableRooms, setAvailableRooms] = useState([])
   const [selectedRoomId, setSelectedRoomId] = useState(params.get('roomTypeId') || '')
@@ -128,15 +136,27 @@ export function BookingPage() {
   const nights = useMemo(() => nightsBetween(form.checkIn, form.checkOut), [form.checkIn, form.checkOut])
   const stayDateError = useMemo(() => getStayDateError(form.checkIn, form.checkOut), [form.checkIn, form.checkOut])
   const priceRoom = selectedRoom || detailRoom
+  const selectedOfferForRoom = useMemo(
+    () => (offerAppliesToRoom(selectedOffer, priceRoom?.id || selectedRoomId) ? selectedOffer : null),
+    [priceRoom?.id, selectedOffer, selectedRoomId],
+  )
+  const allRoomOffers = useMemo(
+    () => offers.filter(isAllRoomOffer),
+    [offers],
+  )
+  const reviewOffers = useMemo(
+    () => offersForRoom(offers, priceRoom?.id || selectedRoomId),
+    [offers, priceRoom?.id, selectedRoomId],
+  )
   const selectedAmenityItems = useMemo(
-    () => getSelectedAmenityItems(priceRoom, bookableAmenities, selectedAmenityIds),
-    [priceRoom, bookableAmenities, selectedAmenityIds],
+    () => getSelectedAmenityItems(priceRoom, bookableAmenities, selectedAmenityIds, form.adults),
+    [priceRoom, bookableAmenities, selectedAmenityIds, form.adults],
   )
   const amenitySubtotal = roundMoney(selectedAmenityItems.reduce((sum, amenity) => sum + Number(amenity.price || 0), 0) * Number(form.roomsCount || 1))
   const roomNightPrice = priceRoom ? Number(priceRoom.subtotal ? priceRoom.subtotal / Math.max(nights, 1) : priceRoom.offer_price || priceRoom.base_price) : 0
   const roomSubtotal = priceRoom ? Number(priceRoom.subtotal || roomNightPrice * nights) * Number(form.roomsCount || 1) : 0
   const grossSubtotal = roundMoney(roomSubtotal + amenitySubtotal)
-  const offerDiscount = calculateOfferDiscount(selectedOffer, grossSubtotal)
+  const offerDiscount = calculateOfferDiscount(selectedOfferForRoom, grossSubtotal)
   const subtotalBeforeRedemption = Math.max(0, roundMoney(grossSubtotal - offerDiscount))
   const maxRedeemablePoints = loyaltyRedeemEligible ? Math.min(availableLoyaltyPoints, Math.floor(Math.max(0, subtotalBeforeRedemption - 1) / 100)) : 0
   const appliedRedeemPoints = Math.min(Math.max(0, Number(redeemPoints || 0)), maxRedeemablePoints)
@@ -173,14 +193,16 @@ export function BookingPage() {
   }, [form, params, paymentMode, redeemPoints, selectedAmenityIds, selectedOfferId, selectedRoomId, setParams])
 
   useEffect(() => {
-    if (!form.guestEmail && firebaseUser?.email) {
+    const profile = appUser.data?.user
+    if ((!form.guestEmail || !form.guestPhone) && firebaseUser?.email) {
       setForm((current) => ({
         ...current,
-        guestName: current.guestName || firebaseUser.displayName || '',
+        guestName: current.guestName || profile?.fullName || firebaseUser.displayName || '',
         guestEmail: current.guestEmail || firebaseUser.email || '',
+        guestPhone: current.guestPhone || profile?.phone || '',
       }))
     }
-  }, [firebaseUser, form.guestEmail])
+  }, [appUser.data?.user, firebaseUser, form.guestEmail, form.guestPhone])
 
   useEffect(() => {
     if (authDraftRestored.current || authLoading || !isAuthenticated) return
@@ -203,6 +225,10 @@ export function BookingPage() {
         guestName: draft.form.guestName || current.guestName,
         guestEmail: draft.form.guestEmail || current.guestEmail,
         guestPhone: draft.form.guestPhone || current.guestPhone,
+        gstClaim: {
+          ...current.gstClaim,
+          ...(draft.form.gstClaim || {}),
+        },
       }))
     }
     if (draft.selectedRoomId) setSelectedRoomId(draft.selectedRoomId)
@@ -222,25 +248,25 @@ export function BookingPage() {
 
   useEffect(() => {
     if (!data) return
-    if (selectedOfferId && !offers.some((offer) => offer.id === selectedOfferId)) {
+    if (selectedOfferId && !offers.some((offer) => offer.id === selectedOfferId && offerAppliesToRoom(offer, priceRoom?.id || selectedRoomId))) {
       setSelectedOfferId('')
       syncUrl(form, selectedRoomId, { step: step === 'review' || step === 'details' ? step : undefined, offerId: '' })
     }
-  }, [data, form, offers, selectedOfferId, selectedRoomId, step, syncUrl])
+  }, [data, form, offers, priceRoom?.id, selectedOfferId, selectedRoomId, step, syncUrl])
 
   useEffect(() => {
-    if (defaultOfferApplied.current || !data || selectedOfferId || !offers[0]?.id) return
+    if (defaultOfferApplied.current || !data || selectedOfferId || !allRoomOffers[0]?.id) return
     defaultOfferApplied.current = true
-    setSelectedOfferId(offers[0].id)
-    syncUrl(form, selectedRoomId, { step: step === 'review' || step === 'details' ? step : undefined, offerId: offers[0].id })
-  }, [data, form, offers, selectedOfferId, selectedRoomId, step, syncUrl])
+    setSelectedOfferId(allRoomOffers[0].id)
+    syncUrl(form, selectedRoomId, { step: step === 'review' || step === 'details' ? step : undefined, offerId: allRoomOffers[0].id })
+  }, [allRoomOffers, data, form, selectedOfferId, selectedRoomId, step, syncUrl])
 
   useEffect(() => {
     if (!priceRoom || !selectedAmenityIds.length) return
-    const validIds = new Set(getAddOnAmenityItems(priceRoom, bookableAmenities).map((amenity) => amenity.id).filter(Boolean))
+    const validIds = new Set(getAddOnAmenityItems(priceRoom, bookableAmenities, form.adults).map((amenity) => amenity.id).filter(Boolean))
     const nextSelected = selectedAmenityIds.filter((id) => validIds.has(id))
     if (nextSelected.length !== selectedAmenityIds.length) setSelectedAmenityIds(nextSelected)
-  }, [priceRoom, bookableAmenities, selectedAmenityIds])
+  }, [priceRoom, bookableAmenities, selectedAmenityIds, form.adults])
 
   useEffect(() => {
     if (!data) return
@@ -306,6 +332,11 @@ export function BookingPage() {
   }
 
   function chooseOffer(offerId) {
+    const offer = offers.find((item) => item.id === offerId)
+    if (offerId && offer && !offerAppliesToRoom(offer, priceRoom?.id || selectedRoomId)) {
+      showGuideToast('Offer unavailable', 'This offer is not available for the selected room category.')
+      return
+    }
     const nextOfferId = selectedOfferId === offerId ? '' : offerId
     setSelectedOfferId(nextOfferId)
     syncUrl(form, selectedRoomId, { step: step === 'review' || step === 'details' ? step : undefined, offerId: nextOfferId })
@@ -356,7 +387,7 @@ export function BookingPage() {
       const selectedStillAvailable = payload.rooms.some((room) => room.id === preferredRoomId)
       const firstRoom = payload.rooms[0]
       const nextRoomId = selectedStillAvailable ? preferredRoomId : firstRoom?.id || ''
-      const nextAmenityIds = withRequiredExtraBedAmenity(selectedAmenityIds, payload.rooms, bookableAmenities, nextRoomId)
+      const nextAmenityIds = withRequiredExtraBedAmenity(selectedAmenityIds, payload.rooms, bookableAmenities, nextRoomId, searchForm.adults)
       if (nextAmenityIds.length !== selectedAmenityIds.length) setSelectedAmenityIds(nextAmenityIds)
       setSelectedRoomId(nextRoomId)
       syncUrl(searchForm, nextRoomId, { step: preservedStep, amenityIds: nextAmenityIds })
@@ -493,6 +524,14 @@ export function BookingPage() {
       showGuideToast('Add phone number', 'Please enter a valid phone number before booking this room.')
       return
     }
+    if (form.gstClaim?.enabled) {
+      const missingGstDetails = !String(form.gstClaim.companyName || '').trim() || !String(form.gstClaim.gstNumber || '').trim() || !String(form.gstClaim.companyAddress || '').trim()
+      if (missingGstDetails) {
+        setStatus({ loading: false, error: '', paymentError: 'Enter company name, GST number, and company address for GST claim.' })
+        showGuideToast('GST details required', 'Complete all GST claim fields before payment.')
+        return
+      }
+    }
     if (!termsAccepted) {
       setStatus({ loading: false, error: '', paymentError: 'Accept the booking terms and conditions to continue.' })
       showGuideToast('Terms required', 'Please accept the booking terms before secure payment.')
@@ -513,8 +552,9 @@ export function BookingPage() {
           guestName: form.guestName || firebaseUser?.displayName || firebaseUser?.email,
           guestEmail: form.guestEmail || firebaseUser?.email,
           guestPhone: form.guestPhone || undefined,
-          offerId: selectedOffer?.id || undefined,
+          offerId: selectedOfferForRoom?.id || undefined,
           selectedAmenityIds,
+          gstClaim: form.gstClaim || { enabled: false },
           redeemPoints: appliedRedeemPoints,
           paymentMode,
           termsAccepted,
@@ -619,7 +659,7 @@ export function BookingPage() {
   }
 
   if (step === 'details' && detailRoom) {
-    return <RoomDetails room={getDisplayRoomForGuests(detailRoom, form.adults)} hotel={data.hotel} form={form} nights={nights} amenities={bookableAmenities} offers={offers} selectedOfferId={selectedOfferId} selectedAmenityIds={selectedAmenityIds} selectedOffer={selectedOffer} offerDiscount={offerDiscount} onSelectOffer={chooseOffer} onToggleAmenity={toggleAmenity} onBook={() => selectRoom(detailRoom)} onClose={backToRooms} />
+    return <RoomDetails room={getDisplayRoomForGuests(detailRoom, form.adults)} hotel={data.hotel} form={form} nights={nights} amenities={bookableAmenities} offers={offersForRoom(offers, detailRoom.id)} selectedOfferId={selectedOfferId} selectedAmenityIds={selectedAmenityIds} selectedOffer={offerAppliesToRoom(selectedOfferForRoom, detailRoom.id) ? selectedOfferForRoom : null} offerDiscount={offerDiscount} onSelectOffer={chooseOffer} onToggleAmenity={toggleAmenity} onBook={() => selectRoom(detailRoom)} onClose={backToRooms} />
   }
 
   if (step === 'review') {
@@ -637,7 +677,7 @@ export function BookingPage() {
         grossSubtotal={grossSubtotal}
         subtotal={subtotal}
         subtotalBeforeRedemption={subtotalBeforeRedemption}
-        selectedOffer={selectedOffer}
+        selectedOffer={selectedOfferForRoom}
         selectedOfferId={selectedOfferId}
         offerDiscount={offerDiscount}
         loyaltyDiscount={loyaltyDiscount}
@@ -652,7 +692,7 @@ export function BookingPage() {
         paymentDue={paymentDue}
         balanceDue={balanceDue}
         loyaltyPoints={loyaltyPoints}
-        offers={offers}
+        offers={reviewOffers}
         status={status}
         guideToast={guideToast}
         isAuthenticated={isAuthenticated}
@@ -702,7 +742,7 @@ export function BookingPage() {
 
         {(status.error || (stayDateError && form.checkIn && form.checkOut)) ? <p className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{status.error || stayDateError}</p> : null}
 
-        {offers.length ? <BookingOfferBand offers={offers} selectedOfferId={selectedOfferId} onSelectOffer={chooseOffer} /> : null}
+        {allRoomOffers.length ? <BookingOfferBand offers={allRoomOffers} selectedOfferId={selectedOfferId} onSelectOffer={chooseOffer} /> : null}
 
         <div ref={roomsSectionRef} className="mt-7 scroll-mt-28">
           <section className="grid gap-5">
@@ -718,7 +758,7 @@ export function BookingPage() {
             {roomsForDisplay.length ? (
               <Stagger className="grid gap-4">
                 {roomsForDisplay.map((room) => (
-                  <RoomCard key={room.id} room={room} adults={form.adults} searched={searched} selected={room.id === selectedRoomId} loading={status.loading} offers={offers} selectedOfferId={selectedOfferId} offer={selectedOffer} nights={nights} roomsCount={form.roomsCount} onSelectOffer={chooseOffer} onDetails={() => openDetails(room)} onBook={() => selectRoom(room)} />
+                  <RoomCard key={room.id} room={room} adults={form.adults} searched={searched} selected={room.id === selectedRoomId} loading={status.loading} offers={offersForRoom(offers, room.id)} selectedOfferId={selectedOfferId} offer={offerAppliesToRoom(selectedOfferForRoom, room.id) ? selectedOfferForRoom : null} nights={nights} roomsCount={form.roomsCount} onSelectOffer={chooseOffer} onDetails={() => openDetails(room)} onBook={() => selectRoom(room)} />
                 ))}
               </Stagger>
             ) : (
@@ -742,7 +782,7 @@ function BookingOfferBand({ offers, selectedOfferId, onSelectOffer }) {
           <p className="eyebrow">Apply offer</p>
           <h2 className="mt-1 text-2xl font-extrabold">Direct booking savings</h2>
         </div>
-        <p className="max-w-md text-sm font-semibold leading-6 text-stone-600">Choose an offer now; final eligibility and discount are checked again before payment.</p>
+        <p className="max-w-md text-sm font-semibold leading-6 text-stone-600">These offers apply to every room. Room-specific offers appear only on eligible room cards.</p>
       </div>
       <AutoScrollRow ariaLabel="Booking offers" className="mt-4" step={340}>
         {offers.slice(0, 8).map((offer) => (
@@ -1076,7 +1116,7 @@ function BookingReviewPage({
   termsAccepted,
   setTermsAccepted,
 }) {
-  const roomAmenities = getAddOnAmenityItems(priceRoom, data.amenities || [])
+  const roomAmenities = getAddOnAmenityItems(priceRoom, data.amenities || [], form.adults)
   const [breakdownOpen, setBreakdownOpen] = useState(false)
   const [termsOpen, setTermsOpen] = useState(false)
   const tenantMode = resolveTenantFromLocation()
@@ -1246,6 +1286,13 @@ function BookingReviewPage({
               )}
 
               {isAuthenticated ? (
+                <GstClaimCard
+                  value={form.gstClaim || {}}
+                  onChange={(gstClaim) => setForm({ ...form, gstClaim })}
+                />
+              ) : null}
+
+              {isAuthenticated ? (
                 <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/80 p-3">
                   <label className="flex items-start gap-3 text-sm font-semibold leading-6 text-stone-700">
                     <input className="mt-1 h-4 w-4 accent-[#7f1d1d]" type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} />
@@ -1307,6 +1354,51 @@ function PaymentOption({ active, title, amount, note, onClick }) {
       <p className="mt-2 text-xl font-black">Rs {Number(amount || 0).toLocaleString('en-IN')}</p>
       <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">{note}</p>
     </button>
+  )
+}
+
+function GstClaimCard({ value = {}, onChange }) {
+  const enabled = Boolean(value.enabled)
+  const update = (patch) => onChange({
+    enabled,
+    companyName: value.companyName || '',
+    gstNumber: value.gstNumber || '',
+    companyAddress: value.companyAddress || '',
+    ...patch,
+  })
+
+  return (
+    <section className={`mt-4 overflow-hidden rounded-lg border transition duration-300 ${enabled ? 'border-emerald-300 bg-[linear-gradient(135deg,#ecfdf5,#ffffff_58%,#f0fdf4)] shadow-soft' : 'border-emerald-100 bg-emerald-50/70'}`}>
+      <button
+        type="button"
+        className="flex w-full items-start justify-between gap-3 p-3 text-left"
+        onClick={() => update({ enabled: !enabled })}
+        aria-expanded={enabled}
+      >
+        <span className="min-w-0">
+          <span className="block text-xs font-black uppercase tracking-[0.14em] text-emerald-700">GST claim</span>
+          <span className="mt-1 block text-sm font-extrabold leading-6 text-charcoal">Need invoice details for company GST?</span>
+        </span>
+        <span className={`mt-1 inline-flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition ${enabled ? 'bg-emerald-600' : 'bg-emerald-200'}`}>
+          <span className={`h-4 w-4 rounded-full bg-white shadow transition ${enabled ? 'translate-x-5' : ''}`} />
+        </span>
+      </button>
+      {enabled ? (
+        <div className="grid gap-3 border-t border-emerald-100 p-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Company name">
+              <input className="input border-emerald-200 focus:border-emerald-500" value={value.companyName || ''} onChange={(event) => update({ companyName: event.target.value })} placeholder="Registered company name" />
+            </Field>
+            <Field label="GST number">
+              <input className="input border-emerald-200 uppercase focus:border-emerald-500" value={value.gstNumber || ''} onChange={(event) => update({ gstNumber: event.target.value.toUpperCase() })} placeholder="27ABCDE1234F1Z5" />
+            </Field>
+          </div>
+          <Field label="Company address">
+            <textarea className="input min-h-24 border-emerald-200 py-3 focus:border-emerald-500" value={value.companyAddress || ''} onChange={(event) => update({ companyAddress: event.target.value })} placeholder="Billing address for GST invoice" />
+          </Field>
+        </div>
+      ) : null}
+    </section>
   )
 }
 
@@ -1441,8 +1533,8 @@ function AmenityInfoCard({ amenity }) {
 
 function RoomDetails({ room, hotel, form, nights, amenities, offers, selectedOfferId, selectedAmenityIds, selectedOffer, offerDiscount, onSelectOffer, onToggleAmenity, onBook, onClose }) {
   const gallery = Array.isArray(room.gallery) && room.gallery.length ? room.gallery : [{ url: room.hero_image_url || fallbackRoomImage, alt: room.name }]
-  const { included: includedAmenities, addOns: addOnAmenities } = splitAmenityItems(room, amenities)
-  const selectedAmenityItems = getSelectedAmenityItems(room, amenities, selectedAmenityIds)
+  const { included: includedAmenities, addOns: addOnAmenities } = splitAmenityItems(room, amenities, form.adults)
+  const selectedAmenityItems = getSelectedAmenityItems(room, amenities, selectedAmenityIds, form.adults)
   const amenitySubtotal = roundMoney(selectedAmenityItems.reduce((sum, amenity) => sum + Number(amenity.price || 0), 0) * Number(form.roomsCount || 1))
   const roomNightPrice = Number(room.subtotal ? room.subtotal / Math.max(nights, 1) : room.offer_price || room.base_price)
   const roomSubtotal = roundMoney(Number(room.subtotal || roomNightPrice * Math.max(nights, 1)) * Number(form.roomsCount || 1))
@@ -1643,7 +1735,7 @@ function getRoomAmenityItems(room) {
   return (room.amenities || []).map((name) => ({ id: '', name, description: '', price: 0, icon: 'sparkles' }))
 }
 
-function splitAmenityItems(room, hotelAmenities = []) {
+function splitAmenityItems(room, hotelAmenities = [], adults = 1) {
   const hotelItems = (hotelAmenities || [])
     .filter((amenity) => amenity?.name)
     .map((amenity) => ({
@@ -1680,6 +1772,7 @@ function splitAmenityItems(room, hotelAmenities = []) {
   }
 
   for (const amenity of hotelItems) {
+    if (isExtraBedAmenity(amenity) && Number(adults || 1) !== 3) continue
     const key = amenity.id || amenity.name
     if (Number(amenity.price || 0) <= 0) {
       if (!includedKeys.has(key)) {
@@ -1697,13 +1790,13 @@ function splitAmenityItems(room, hotelAmenities = []) {
   return { included, addOns }
 }
 
-function getAddOnAmenityItems(room, hotelAmenities = []) {
-  return splitAmenityItems(room, hotelAmenities).addOns
+function getAddOnAmenityItems(room, hotelAmenities = [], adults = 1) {
+  return splitAmenityItems(room, hotelAmenities, adults).addOns
 }
 
-function getSelectedAmenityItems(room, hotelAmenities, selectedAmenityIds) {
+function getSelectedAmenityItems(room, hotelAmenities, selectedAmenityIds, adults = 1) {
   const selectedIds = new Set(selectedAmenityIds || [])
-  return getAddOnAmenityItems(room, hotelAmenities).filter((amenity) => amenity.id && selectedIds.has(amenity.id))
+  return getAddOnAmenityItems(room, hotelAmenities, adults).filter((amenity) => amenity.id && selectedIds.has(amenity.id))
 }
 
 function getDisplayRoomForGuests(room, adults = 1) {
@@ -1760,12 +1853,16 @@ function isUrl(value) {
 }
 
 function findExtraBedAmenity(amenities = []) {
-  return amenities.find((amenity) => /extra\s*bed|additional\s*bed|rollaway/i.test(String(amenity?.name || '')))
+  return amenities.find((amenity) => isExtraBedAmenity(amenity))
 }
 
-function withRequiredExtraBedAmenity(currentIds = [], rooms = [], amenities = [], selectedRoomId = '') {
+function isExtraBedAmenity(amenity) {
+  return /extra\s*bed|additional\s*bed|rollaway/i.test(String(amenity?.name || ''))
+}
+
+function withRequiredExtraBedAmenity(currentIds = [], rooms = [], amenities = [], selectedRoomId = '', adults = 1) {
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) || rooms[0]
-  if (Number(selectedRoom?.extra_bed_count || 0) <= 0) return currentIds
+  if (Number(adults || 1) !== 3 || Number(selectedRoom?.extra_bed_count || 0) <= 0) return currentIds
   const amenity = findExtraBedAmenity(amenities)
   if (!amenity?.id || currentIds.includes(amenity.id)) return currentIds
   return [...currentIds, amenity.id]
@@ -1816,6 +1913,22 @@ function calculateOfferDiscount(offer, subtotal) {
   const value = Math.max(0, Number(offer.discount_value || 0))
   const rawDiscount = offer.discount_type === 'percentage' ? base * Math.min(value, 100) / 100 : value
   return roundMoney(Math.min(rawDiscount, base))
+}
+
+function offerAppliesToRoom(offer, roomTypeId) {
+  if (!offer) return false
+  if (isAllRoomOffer(offer) || !roomTypeId) return true
+  const roomTypeIds = Array.isArray(offer.room_type_ids) ? offer.room_type_ids : []
+  return roomTypeIds.includes(roomTypeId)
+}
+
+function isAllRoomOffer(offer) {
+  const roomTypeIds = Array.isArray(offer?.room_type_ids) ? offer.room_type_ids : []
+  return roomTypeIds.length === 0
+}
+
+function offersForRoom(offers = [], roomTypeId = '') {
+  return offers.filter((offer) => offerAppliesToRoom(offer, roomTypeId))
 }
 
 function formatOfferValue(offer) {

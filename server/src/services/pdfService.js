@@ -5,7 +5,8 @@ import PDFDocument from 'pdfkit'
 import { env } from '../config/env.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const receiptDir = path.resolve(__dirname, '..', '..', 'receipts')
+export const receiptDir = path.resolve(__dirname, '..', '..', 'receipts')
+export const legacyReceiptDir = path.resolve(__dirname, '..', '..', 'server', 'receipts')
 const webreichLogoPath = path.resolve(__dirname, '..', '..', '..', 'public', 'webreich.png')
 const PAGE = { margin: 42, bottom: 760, contentWidth: 511 }
 const TERMS_VERSION = '2026-09-20'
@@ -72,6 +73,7 @@ export async function generateBookingPdf({ hotel, room, booking, invoice }) {
   const metadata = booking.metadata || {}
   const pricing = metadata.pricing || {}
   const paymentPlan = metadata.paymentPlan || {}
+  const gstClaim = normalizeGstClaim(metadata.gstClaim || booking.gst_claim)
   const selectedAmenities = Array.isArray(metadata.selectedAmenities) ? metadata.selectedAmenities : []
   const address = formatAddress(hotel)
   const currency = booking.currency || hotel?.currency || 'INR'
@@ -83,10 +85,18 @@ export async function generateBookingPdf({ hotel, room, booking, invoice }) {
     stream.on('error', reject)
     doc.pipe(stream)
 
-    drawReceiptHeader(doc, { hotel, invoice, booking, hotelLogo, address })
+    drawReceiptHeader(doc, { hotel, invoice, hotelLogo, address })
     let y = 150
 
     y = drawBookingSummary(doc, y, { hotel, invoice, booking })
+
+    if (gstClaim.enabled) {
+      y = drawInfoGrid(doc, y + 14, 'GST Claim Details', [
+        ['Company name', gstClaim.companyName],
+        ['GST number', gstClaim.gstNumber],
+        ['Company address', gstClaim.companyAddress],
+      ], 2)
+    }
 
     y = drawInfoGrid(doc, y + 14, 'Stay Details', [
       ['Room', room?.name || booking.room_type_name],
@@ -129,20 +139,19 @@ export async function generateBookingPdf({ hotel, room, booking, invoice }) {
   }
 }
 
-function drawReceiptHeader(doc, { hotel, invoice, booking, hotelLogo, address }) {
-  doc.rect(0, 0, doc.page.width, 132).fill('#151210')
-  doc.rect(0, 126, doc.page.width, 6).fill('#c99b45')
-  drawHotelLogo(doc, 42, 26, hotelLogo, hotel?.name)
-  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(21).text(hotel?.name || 'Hotel', 126, 27, { width: 300, height: 48 })
-  doc.fillColor('#d8d0c6').font('Helvetica').fontSize(8.2).text(address || 'Akola, Maharashtra, India', 126, 75, { width: 300, height: 30, lineGap: 1 })
-  doc.fillColor('#f2c76d').font('Helvetica-Bold').fontSize(9).text('Booking Confirmation & Tax Invoice', 126, 108, { width: 260 })
+function drawReceiptHeader(doc, { hotel, invoice, hotelLogo, address }) {
+  doc.rect(0, 0, doc.page.width, 126).fill('#151210')
+  doc.rect(0, 120, doc.page.width, 6).fill('#c99b45')
+  drawHotelLogo(doc, 42, 25, hotelLogo, hotel?.name)
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18).text(hotel?.name || 'Hotel', 118, 27, { width: 292, height: 42 })
+  doc.fillColor('#d8d0c6').font('Helvetica').fontSize(8).text(address || 'Akola, Maharashtra, India', 118, 72, { width: 292, height: 28, lineGap: 1 })
+  doc.fillColor('#f2c76d').font('Helvetica-Bold').fontSize(8.5).text('Booking Confirmation & Tax Invoice', 118, 103, { width: 260 })
 
-  doc.fillColor('#b8afa5').font('Helvetica-Bold').fontSize(7.2).text('INVOICE NUMBER', 425, 30, { width: 128, align: 'right' })
-  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(10).text(invoice.invoice_number, 390, 43, { width: 163, align: 'right', height: 14, ellipsis: true })
-  doc.fillColor('#b8afa5').font('Helvetica-Bold').fontSize(7.2).text('BOOKING REFERENCE', 425, 66, { width: 128, align: 'right' })
-  doc.fillColor('#f2c76d').font('Helvetica-Bold').fontSize(9.2).text(booking.booking_reference, 425, 79, { width: 128, align: 'right' })
-  doc.fillColor('#b8afa5').font('Helvetica-Bold').fontSize(7.2).text('ISSUED ON', 425, 101, { width: 128, align: 'right' })
-  doc.fillColor('#ffffff').font('Helvetica').fontSize(8.5).text(formatDate(invoice.issued_at || new Date()), 425, 114, { width: 128, align: 'right' })
+  doc.roundedRect(420, 26, 132, 74, 6).fillAndStroke('#211d19', '#40372f')
+  doc.fillColor('#b8afa5').font('Helvetica-Bold').fontSize(6.8).text('INVOICE', 432, 38, { width: 108, align: 'right' })
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9).text(invoice.invoice_number, 432, 50, { width: 108, align: 'right', lineGap: 1 })
+  doc.fillColor('#b8afa5').font('Helvetica-Bold').fontSize(6.8).text('ISSUED', 432, 71, { width: 108, align: 'right' })
+  doc.fillColor('#ffffff').font('Helvetica').fontSize(8).text(formatDate(invoice.issued_at || new Date()), 432, 83, { width: 108, align: 'right' })
 }
 
 function drawHotelLogo(doc, x, y, logo, name) {
@@ -159,33 +168,38 @@ function drawHotelLogo(doc, x, y, logo, name) {
 }
 
 function drawBookingSummary(doc, y, { hotel, invoice, booking }) {
-  const columns = [
-    [
-      ['Booking reference', booking.booking_reference],
-      ['Status', booking.status],
-    ],
-    [
-      ['Guest', booking.guest_name],
-      ['Contact', `${booking.guest_phone || '-'} / ${booking.guest_email || '-'}`],
-    ],
-    [
-      ['Hotel', hotel?.name || booking.hotel_name || '-'],
-      ['Invoice', `${invoice.invoice_number} / ${formatDate(invoice.issued_at || new Date())}`],
-    ],
+  const items = [
+    ['Booking reference', booking.booking_reference],
+    ['Status', booking.status],
+    ['Booking time', formatDateTime(booking.confirmed_at || booking.created_at || invoice.issued_at)],
+    ['Guest', booking.guest_name],
+    ['Contact', `${booking.guest_phone || '-'} / ${booking.guest_email || '-'}`],
+    ['Hotel', hotel?.name || booking.hotel_name || '-'],
+    ['Invoice', invoice.invoice_number],
+    ['Issued on', formatDate(invoice.issued_at || new Date())],
   ]
-  const height = 78
+  const columns = 2
+  const colWidth = PAGE.contentWidth / columns
+  const rows = []
+  for (let index = 0; index < items.length; index += columns) rows.push(items.slice(index, index + columns))
+  const rowHeights = rows.map((row) => Math.max(43, ...row.map(([, value]) => {
+    doc.font('Helvetica').fontSize(8.4)
+    return doc.heightOfString(String(value || '-'), { width: colWidth - 30, lineGap: 1 }) + 25
+  })))
+  const height = rowHeights.reduce((sum, rowHeight) => sum + rowHeight, 0)
   y = ensurePage(doc, y, height)
   doc.roundedRect(42, y, PAGE.contentWidth, height, 8).fillAndStroke('#fff8ed', '#e4d7c5')
-  const colWidth = PAGE.contentWidth / 3
-  columns.forEach((items, index) => {
-    const x = 42 + index * colWidth
-    if (index > 0) doc.moveTo(x, y + 12).lineTo(x, y + height - 12).strokeColor('#e6dac9').lineWidth(0.7).stroke()
-    let cursor = y + 15
-    items.forEach(([label, value]) => {
-      doc.fillColor('#7d7267').font('Helvetica-Bold').fontSize(7.2).text(String(label).toUpperCase(), x + 15, cursor, { width: colWidth - 30 })
-      doc.fillColor('#211f1c').font('Helvetica').fontSize(8.2).text(String(value || '-'), x + 15, cursor + 12, { width: colWidth - 30, height: 22, lineGap: 1, ellipsis: true })
-      cursor += 32
+  let cursor = y
+  rows.forEach((row, rowIndex) => {
+    const rowHeight = rowHeights[rowIndex]
+    if (rowIndex > 0) doc.moveTo(42, cursor).lineTo(553, cursor).strokeColor('#e6dac9').lineWidth(0.6).stroke()
+    doc.moveTo(42 + colWidth, cursor + 8).lineTo(42 + colWidth, cursor + rowHeight - 8).strokeColor('#e6dac9').lineWidth(0.6).stroke()
+    row.forEach(([label, value], colIndex) => {
+      const x = 42 + colIndex * colWidth
+      doc.fillColor('#7d7267').font('Helvetica-Bold').fontSize(7).text(String(label).toUpperCase(), x + 15, cursor + 10, { width: colWidth - 30 })
+      doc.fillColor('#211f1c').font('Helvetica').fontSize(8.4).text(String(value || '-'), x + 15, cursor + 23, { width: colWidth - 30, lineGap: 1 })
     })
+    cursor += rowHeight
   })
   return y + height
 }
@@ -295,6 +309,16 @@ function drawContactDetails(doc, y, { hotel, address }) {
   ], 2)
 }
 
+function normalizeGstClaim(value = {}) {
+  if (!value?.enabled) return { enabled: false }
+  return {
+    enabled: true,
+    companyName: value.companyName || value.company_name || '-',
+    gstNumber: value.gstNumber || value.gst_number || '-',
+    companyAddress: value.companyAddress || value.company_address || '-',
+  }
+}
+
 function drawTermsPages(doc, { hotel, booking, webreichLogo, startY }) {
   let y = ensurePage(doc, startY, 220)
   if (y !== startY) y = PAGE.margin
@@ -331,17 +355,20 @@ function drawAcceptanceBox(doc, y, booking, accepted) {
 }
 
 function drawDevelopedBy(doc, y, webreichLogo) {
+  const boxWidth = PAGE.contentWidth
   const x = 42
+  doc.roundedRect(x, y - 8, boxWidth, 42, 6).fillAndStroke('#fffaf0', '#eadfcb')
+  const logoX = x + Math.round((boxWidth - 22 - 286) / 2)
   if (webreichLogo) {
     try {
-      doc.image(webreichLogo, x, y - 2, { fit: [22, 22] })
+      doc.image(webreichLogo, logoX, y + 2, { fit: [22, 22] })
     } catch {
-      doc.fillColor('#e65335').font('Helvetica-Bold').fontSize(9).text('W', x, y + 4, { width: 22, align: 'center' })
+      doc.fillColor('#e65335').font('Helvetica-Bold').fontSize(9).text('W', logoX, y + 8, { width: 22, align: 'center' })
     }
   } else {
-    doc.fillColor('#e65335').font('Helvetica-Bold').fontSize(9).text('W', x, y + 4, { width: 22, align: 'center' })
+    doc.fillColor('#e65335').font('Helvetica-Bold').fontSize(9).text('W', logoX, y + 8, { width: 22, align: 'center' })
   }
-  doc.fillColor('#756b61').font('Helvetica').fontSize(8.5).text('Developed by WebReich. Generated by the WebReich platform for secure hotel booking operations.', x + 30, y + 4, { width: 420 })
+  doc.fillColor('#756b61').font('Helvetica').fontSize(8.5).text('Developed by WebReich. Generated by the WebReich platform for secure hotel booking operations.', logoX + 30, y + 8, { width: 286, align: 'center' })
 }
 
 function sectionTitle(doc, y, title) {

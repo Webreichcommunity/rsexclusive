@@ -11,6 +11,7 @@ import { adminRoutes } from './routes/adminRoutes.js'
 import { superAdminRoutes } from './routes/superAdminRoutes.js'
 import { webhookRoutes } from './routes/webhookRoutes.js'
 import { mediaRoutes } from './routes/mediaRoutes.js'
+import { receiptRoutes } from './routes/receiptRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -30,7 +31,8 @@ export function createApp() {
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'rs-exclusive-api' }))
   app.use('/api/webhooks', webhookRoutes)
   app.use(express.json({ limit: '1mb' }))
-  app.use('/receipts', express.static(path.resolve(__dirname, '..', 'receipts'), { fallthrough: false }))
+  app.use('/receipts', receiptRoutes)
+  app.use('/receipts', express.static(path.resolve(__dirname, '..', 'receipts')))
 
   app.use('/api', publicRoutes)
   app.use('/api/admin', adminRoutes)

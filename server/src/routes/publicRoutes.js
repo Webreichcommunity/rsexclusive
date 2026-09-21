@@ -31,6 +31,12 @@ const bookingSchema = z.object({
   offerId: z.string().uuid().optional(),
   paymentMode: z.enum(['full', 'partial']).default('full'),
   selectedAmenityIds: z.array(z.string().uuid()).default([]),
+  gstClaim: z.object({
+    enabled: z.coerce.boolean().default(false),
+    companyName: z.string().max(160).optional(),
+    gstNumber: z.string().max(32).optional(),
+    companyAddress: z.string().max(500).optional(),
+  }).optional(),
   redeemPoints: z.coerce.number().int().min(0).default(0),
   checkIn: z.coerce.date(),
   checkOut: z.coerce.date(),
@@ -75,6 +81,11 @@ const feedbackSchema = z.object({
   message: z.string().min(5).max(1200),
 })
 
+const cancellationRequestSchema = z.object({
+  reasonOption: z.string().min(2).max(120),
+  reasonText: z.string().max(800).optional(),
+})
+
 publicRoutes.get('/hotels', async (_req, res) => {
   const cached = publicCache.get('hotels')
   if (cached) return res.json(cached)
@@ -82,9 +93,6 @@ publicRoutes.get('/hotels', async (_req, res) => {
 })
 
 publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, requireActiveHotel, async (req, res) => {
-  const cacheKey = `tenant:${req.hotel.id}:${req.user?.id || 'guest'}`
-  const cached = publicCache.get(cacheKey)
-  if (cached) return res.json(cached)
   const [hotel, rooms, amenities, offers, faqs, loyaltyRows] = await Promise.all([
     getHotelProfile(req.hotel.id),
     listRoomsForHotel(req.hotel.id),
@@ -100,7 +108,7 @@ publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, requireActiveHo
         )
       : Promise.resolve({ rows: [] }),
   ])
-  res.json(publicCache.set(cacheKey, { hotel, rooms, amenities, offers, faqs, loyaltyPoints: loyaltyRows.rows[0]?.points || 0 }))
+  res.json({ hotel, rooms, amenities, offers, faqs, loyaltyPoints: loyaltyRows.rows[0]?.points || 0 })
 })
 
 publicRoutes.post('/auth/register', optionalTenant, requireActiveHotel, validate(registerSchema), async (req, res) => {
@@ -310,13 +318,26 @@ publicRoutes.patch('/me', optionalTenant, authenticate, validate(profileSchema),
 
 publicRoutes.get('/me/bookings', optionalTenant, authenticate, async (req, res) => {
   const { rows } = await query(
-    `SELECT b.*, h.name AS hotel_name, rt.name AS room_type_name,
-            rt.bed_type, rt.size_sqft, rt.description AS room_description, rt.hero_image_url AS room_image_url,
-            i.invoice_number, i.issued_at AS invoice_issued_at, i.pdf_url
+    `SELECT b.*, h.name AS hotel_name,
+            coalesce(rt.name, b.room_snapshot->>'name', 'Deleted room category') AS room_type_name,
+            coalesce(rt.bed_type, b.room_snapshot->>'bed_type') AS bed_type,
+            coalesce(rt.size_sqft, nullif(b.room_snapshot->>'size_sqft', '')::int) AS size_sqft,
+            coalesce(rt.description, b.room_snapshot->>'description') AS room_description,
+            coalesce(rt.hero_image_url, b.room_snapshot->>'hero_image_url') AS room_image_url,
+            i.invoice_number, i.issued_at AS invoice_issued_at, i.pdf_url,
+            cr.id AS cancellation_request_id,
+            cr.status AS cancellation_status,
+            cr.reason_option AS cancellation_reason_option,
+            cr.reason_text AS cancellation_reason_text,
+            cr.refund_amount AS cancellation_refund_amount,
+            cr.admin_message AS cancellation_admin_message,
+            cr.requested_at AS cancellation_requested_at,
+            cr.reviewed_at AS cancellation_reviewed_at
      FROM bookings b
      JOIN hotels h ON h.id = b.hotel_id
-     JOIN room_types rt ON rt.id = b.room_type_id
+     LEFT JOIN room_types rt ON rt.id = b.room_type_id
      LEFT JOIN invoices i ON i.booking_id = b.id
+     LEFT JOIN booking_cancellation_requests cr ON cr.booking_id = b.id
      WHERE b.user_id = $1
      ORDER BY b.created_at DESC
      LIMIT 50`,
@@ -327,13 +348,26 @@ publicRoutes.get('/me/bookings', optionalTenant, authenticate, async (req, res) 
 
 publicRoutes.get('/me/bookings/:bookingReference', optionalTenant, authenticate, async (req, res) => {
   const { rows } = await query(
-    `SELECT b.*, h.name AS hotel_name, rt.name AS room_type_name,
-            rt.bed_type, rt.size_sqft, rt.description AS room_description, rt.hero_image_url AS room_image_url,
-            i.invoice_number, i.issued_at AS invoice_issued_at, i.pdf_url
+    `SELECT b.*, h.name AS hotel_name,
+            coalesce(rt.name, b.room_snapshot->>'name', 'Deleted room category') AS room_type_name,
+            coalesce(rt.bed_type, b.room_snapshot->>'bed_type') AS bed_type,
+            coalesce(rt.size_sqft, nullif(b.room_snapshot->>'size_sqft', '')::int) AS size_sqft,
+            coalesce(rt.description, b.room_snapshot->>'description') AS room_description,
+            coalesce(rt.hero_image_url, b.room_snapshot->>'hero_image_url') AS room_image_url,
+            i.invoice_number, i.issued_at AS invoice_issued_at, i.pdf_url,
+            cr.id AS cancellation_request_id,
+            cr.status AS cancellation_status,
+            cr.reason_option AS cancellation_reason_option,
+            cr.reason_text AS cancellation_reason_text,
+            cr.refund_amount AS cancellation_refund_amount,
+            cr.admin_message AS cancellation_admin_message,
+            cr.requested_at AS cancellation_requested_at,
+            cr.reviewed_at AS cancellation_reviewed_at
      FROM bookings b
      JOIN hotels h ON h.id = b.hotel_id
-     JOIN room_types rt ON rt.id = b.room_type_id
+     LEFT JOIN room_types rt ON rt.id = b.room_type_id
      LEFT JOIN invoices i ON i.booking_id = b.id
+     LEFT JOIN booking_cancellation_requests cr ON cr.booking_id = b.id
      WHERE b.user_id = $1 AND b.booking_reference = $2
      LIMIT 1`,
     [req.user.id, req.params.bookingReference],
@@ -345,4 +379,42 @@ publicRoutes.get('/me/bookings/:bookingReference', optionalTenant, authenticate,
   }
 
   res.json({ booking: rows[0] })
+})
+
+publicRoutes.post('/me/bookings/:bookingReference/cancellation-requests', optionalTenant, authenticate, validate(cancellationRequestSchema), async (req, res) => {
+  const cancellation = await transaction(async (db) => {
+    const { rows: bookingRows } = await db.query(
+      `SELECT id, hotel_id, status, check_in
+       FROM bookings
+       WHERE user_id = $1 AND booking_reference = $2
+       FOR UPDATE`,
+      [req.user.id, req.params.bookingReference],
+    )
+    const booking = bookingRows[0]
+    if (!booking) throw badRequest('Booking was not found in your account.', 'booking_not_found')
+    if (!['confirmed', 'payment_pending', 'pending'].includes(booking.status)) {
+      throw conflict('This booking cannot be cancelled from its current status.', 'booking_not_cancellable')
+    }
+    const { rows } = await db.query(
+      `INSERT INTO booking_cancellation_requests (
+         hotel_id, booking_id, user_id, reason_option, reason_text
+       )
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (booking_id) DO UPDATE SET
+         reason_option = EXCLUDED.reason_option,
+         reason_text = EXCLUDED.reason_text,
+         status = CASE
+           WHEN booking_cancellation_requests.status = 'requested' THEN 'requested'
+           ELSE booking_cancellation_requests.status
+         END,
+         updated_at = now()
+       WHERE booking_cancellation_requests.status = 'requested'
+       RETURNING *`,
+      [booking.hotel_id, booking.id, req.user.id, req.body.reasonOption, req.body.reasonText || null],
+    )
+    if (!rows[0]) throw conflict('This cancellation request has already been reviewed.', 'cancellation_already_reviewed')
+    return rows[0]
+  })
+
+  res.status(201).json({ request: cancellation })
 })
