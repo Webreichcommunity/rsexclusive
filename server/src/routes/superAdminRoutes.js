@@ -111,6 +111,10 @@ superAdminRoutes.get('/overview', async (_req, res) => {
      )
      SELECT
        h.id, h.name, h.slug, h.subdomain, h.custom_domain, h.status, h.address, h.contact, h.branding, h.hero_image_url, h.payment_config, h.created_at,
+       CASE
+         WHEN h.branding->>'displayOrder' ~ '^[0-9]+$' THEN (h.branding->>'displayOrder')::int
+         ELSE 999
+       END AS display_order,
        coalesce(bm.bookings, 0)::int AS bookings,
        coalesce(cm.customers, 0)::int AS customers,
        coalesce(bm.revenue, 0)::numeric AS revenue,
@@ -119,7 +123,7 @@ superAdminRoutes.get('/overview', async (_req, res) => {
      LEFT JOIN booking_metrics bm ON bm.hotel_id = h.id
      LEFT JOIN customer_metrics cm ON cm.hotel_id = h.id
      LEFT JOIN admin_metrics am ON am.hotel_id = h.id
-     ORDER BY h.created_at DESC`,
+     ORDER BY display_order ASC, h.created_at ASC`,
   )
   res.json({ hotels: rows })
 })
@@ -662,6 +666,7 @@ function collectMediaItems(hotelOrPayload = {}) {
   const items = []
   addMediaItem(items, hotelOrPayload.hero_image_url || hotelOrPayload.heroImageUrl, 'heroImageUrl')
   addMediaItem(items, branding.logoUrl, 'logoUrl')
+  addMediaItem(items, branding.mainImage || branding.mainImageUrl, 'mainImage')
   addMediaItem(items, branding.showcaseImageUrl, 'showcaseImageUrl')
   addMediaItem(items, branding.diningImageUrl, 'diningImageUrl')
   for (const item of normalizeMediaList(branding.heroImages)) addMediaItem(items, item, 'heroImages')

@@ -27,7 +27,7 @@ export function AppShell({ children, mode }) {
   const hotel = tenant.data?.hotel
   const offers = tenant.data?.offers || []
   const hotels = collection.data?.hotels || []
-  const brandName = mode.isTenant ? hotel?.branding?.logoText || hotel?.name || 'R.S. Exclusive' : 'Ranjeet Groups of Hotels Akola'
+  const brandName = mode.isTenant ? hotel?.branding?.logoText || hotel?.name || tenantDisplayName(mode.key) : 'Ranjeet Groups of Hotels Akola'
   const subline = mode.isTenant ? (hotel ? cleanCity(hotel.address?.city) : 'Boutique hospitality') : 'Curated Akola hospitality'
   const accountLabel = isAuthenticated ? firstName(firebaseUser?.displayName || firebaseUser?.email || 'Account') : 'Login / Join'
   const accountPath = isAuthenticated ? tenantPath('/account', mode) : tenantPath('/login?mode=register', mode)
@@ -256,8 +256,15 @@ export function AppShell({ children, mode }) {
           <div>
             <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-stone-400">Contact</p>
             <div className="mt-4 grid gap-3 text-sm text-stone-300">
-              <span className="flex items-center gap-2"><Phone size={16} className="shrink-0 text-amber-100" /> <span className="min-w-0 break-words">{hotelPhones(hotel).join(', ') || '+91 90000 00000'}</span></span>
-              <span className="flex items-center gap-2"><Mail size={16} className="shrink-0 text-amber-100" /> <span className="min-w-0 break-words">{hotel?.contact?.email || 'bookings@example.com'}</span></span>
+              <span className="flex items-start gap-2">
+                <Phone size={16} className="mt-0.5 shrink-0 text-amber-100" />
+                <span className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 break-words">
+                  {hotelPhones(hotel).length
+                    ? hotelPhones(hotel).map((phone, index, phones) => <PhoneLink key={phone} phone={phone} suffix={index < phones.length - 1 ? ',' : ''} />)
+                    : <span>Phone number updating soon</span>}
+                </span>
+              </span>
+              {hotel?.contact?.email ? <span className="flex items-center gap-2"><Mail size={16} className="shrink-0 text-amber-100" /> <span className="min-w-0 break-words">{hotel.contact.email}</span></span> : null}
               <span className="flex items-start gap-2"><MapPin size={17} className="mt-0.5 shrink-0 text-amber-100" /> <span className="line-clamp-3 min-w-0 leading-6">{formatAddress(hotel)}</span></span>
             </div>
           </div>
@@ -399,6 +406,22 @@ function cleanHotelName(value) {
   return String(value || 'R.S. Exclusive').replace(/\s+/g, ' ').trim()
 }
 
+function tenantDisplayName(value) {
+  const key = String(value || '').toLowerCase()
+  if (/(^|-)rs($|-)|rs-exclusive|r-s-exclusive/.test(key)) return 'RS Exclusive Stay & Fine Dine'
+  if (/(^|-)rg($|-)|rg-exclusive|r-g-exclusive/.test(key)) return 'RG Exclusive Stay & Fine Dine'
+  if (/ranjeet/.test(key)) return 'Ranjeet Hotel'
+  return cleanHotelName(toTitle(value) || 'Hotel')
+}
+
+function toTitle(value) {
+  return String(value || '')
+    .split(/[-_\s.]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}
+
 function cleanCity(value) {
   const city = String(value || '').replace(/\s+/g, ' ').trim()
   if (!city || /exlusive|exclusive|fine dine|stay/i.test(city)) return 'Akola'
@@ -407,6 +430,14 @@ function cleanCity(value) {
 
 function hotelPhones(hotel) {
   return [...new Set([...(hotel?.contact?.phones || []), hotel?.contact?.phone, hotel?.contact?.whatsapp].filter(Boolean))]
+}
+
+function PhoneLink({ phone, suffix = '' }) {
+  return (
+    <a className="font-bold underline-offset-4 transition hover:text-amber-100 hover:underline" href={`tel:${phoneDialValue(phone)}`}>
+      {phone}{suffix}
+    </a>
+  )
 }
 
 function premiumHotelSummary(hotel) {
@@ -447,11 +478,24 @@ function whatsappLink(value, hotel) {
   return `https://wa.me/${number}?text=${message}`
 }
 
+function phoneDialValue(value) {
+  const raw = String(value || '').trim()
+  const hasPlus = raw.startsWith('+')
+  const digits = raw.replace(/\D/g, '')
+  if (!digits) return raw
+  return hasPlus ? `+${digits}` : digits
+}
+
 function getHotelHeroImages(hotel) {
   const uploaded = Array.isArray(hotel?.branding?.heroImages)
     ? hotel.branding.heroImages.map((item) => (typeof item === 'string' ? item : item?.url || item?.secureUrl)).filter(Boolean)
     : []
-  return [...uploaded, hotel?.hero_image_url].filter(Boolean)
+  const mainImage = mediaUrl(hotel?.branding?.mainImage) || hotel?.branding?.mainImageUrl
+  return [mainImage, ...uploaded, hotel?.hero_image_url].filter(Boolean)
+}
+
+function mediaUrl(value) {
+  return typeof value === 'string' ? value : value?.url || value?.secureUrl || ''
 }
 
 function getBackgroundVideoSource(value) {

@@ -37,6 +37,7 @@ const activityArchiveKey = 'rs-exclusive-super-admin-activities'
 const emptyHotel = {
   name: '',
   legalName: '',
+  displayOrder: 1,
   slug: '',
   subdomain: '',
   description: '',
@@ -55,6 +56,7 @@ const emptyHotel = {
   checkOut: '11:00',
   logoUrl: '',
   logoPublicId: '',
+  mainImage: null,
   heroImageUrl: '',
   heroImages: [],
   showcaseImages: [],
@@ -166,8 +168,8 @@ export function SuperAdminPage() {
       const media = { url: image.secureUrl, publicId: image.publicId, alt: file.name.replace(/\.[^.]+$/, '') }
       if (field === 'logoUrl') {
         setHotelForm((current) => ({ ...current, logoUrl: image.secureUrl, logoPublicId: image.publicId }))
-      } else if (field === 'diningImage') {
-        setHotelForm((current) => ({ ...current, diningImage: media }))
+      } else if (['mainImage', 'diningImage'].includes(field)) {
+        setHotelForm((current) => ({ ...current, [field]: media }))
       } else if (['heroImages', 'showcaseImages', 'gallery'].includes(field)) {
         const limits = { heroImages: 3, showcaseImages: 3, gallery: 5 }
         setHotelForm((current) => ({
@@ -199,7 +201,7 @@ export function SuperAdminPage() {
   function removeHotelMedia(field, index = 0) {
     setHotelForm((current) => {
       if (field === 'logoUrl') return { ...current, logoUrl: '', logoPublicId: '' }
-      if (field === 'diningImage') return { ...current, diningImage: null }
+      if (['mainImage', 'diningImage'].includes(field)) return { ...current, [field]: null }
       const nextItems = current[field].filter((_, itemIndex) => itemIndex !== index)
       return {
         ...current,
@@ -421,6 +423,7 @@ function HotelForm({ mode, form, saving, onBack, onChange, onSubmit, onUpload, o
         <FormBlock title="Identity">
           <Field label="Hotel name"><input className="input" value={form.name} onChange={(event) => onChange('name', event.target.value)} required /></Field>
           <Field label="Legal name"><input className="input" value={form.legalName} onChange={(event) => onChange('legalName', event.target.value)} /></Field>
+          <Field label="Website display order"><input className="input" type="number" min="1" max="99" value={form.displayOrder} onChange={(event) => onChange('displayOrder', event.target.value)} /></Field>
           <Field label="Slug"><input className="input" value={form.slug} onChange={(event) => onChange('slug', slugify(event.target.value))} required /></Field>
           <Field label="Subdomain"><input className="input" value={form.subdomain} onChange={(event) => onChange('subdomain', slugify(event.target.value))} required /></Field>
           <Field label="Description"><textarea className="input min-h-28 py-3" value={form.description} onChange={(event) => onChange('description', event.target.value)} required /></Field>
@@ -464,6 +467,8 @@ function HotelForm({ mode, form, saving, onBack, onChange, onSubmit, onUpload, o
         <FormBlock title="Branding and media">
           <UploadField label="Hotel logo" value={form.logoUrl ? 'Logo uploaded' : ''} onFile={(file) => onUpload('logoUrl', file, 'hotel-logo')} />
           <MediaList items={form.logoUrl ? [{ url: form.logoUrl, alt: 'Logo' }] : []} singular="logo" onRemove={() => onRemoveMedia('logoUrl')} />
+          <UploadField label="Main website and login image (1 image, landscape)" value={form.mainImage?.url ? 'Main image uploaded' : ''} onFile={(file) => onUpload('mainImage', file, 'hotel-main')} />
+          <MediaList items={form.mainImage ? [form.mainImage] : []} singular="main image" onRemove={() => onRemoveMedia('mainImage')} />
           <UploadField label="Hero images (max 3, up to 10 MB each)" multiple disabled={Boolean(form.youtubeEmbedUrl)} value={`${form.heroImages.length}/3 uploaded`} onFiles={(files) => onUploadMany('heroImages', files, 'hotel-hero', 3 - form.heroImages.length)} />
           <MediaList items={form.heroImages} singular="hero image" onRemove={(index) => onRemoveMedia('heroImages', index)} />
           <Field label="YouTube embed or video URL">
@@ -802,6 +807,9 @@ function toHotelPayload(form) {
       logoText: form.name,
       logoUrl: form.logoUrl,
       logoPublicId: form.logoPublicId,
+      displayOrder: Number(form.displayOrder || 999),
+      mainImage: form.mainImage,
+      mainImageUrl: form.mainImage?.url || '',
       heroImages,
       showcaseImages,
       showcaseImageUrl: showcaseImages[0]?.url || '',
@@ -821,6 +829,7 @@ function toHotelForm(hotel) {
     ...emptyHotel,
     name: hotel.name || '',
     legalName: hotel.legal_name || '',
+    displayOrder: hotel.branding?.displayOrder || hotel.display_order || 1,
     slug: hotel.slug || '',
     subdomain: hotel.subdomain || '',
     description: hotel.description || '',
@@ -839,6 +848,7 @@ function toHotelForm(hotel) {
     checkOut: hotel.policies?.checkOut || '11:00',
     logoUrl: hotel.branding?.logoUrl || '',
     logoPublicId: hotel.branding?.logoPublicId || '',
+    mainImage: normalizeMediaItems([hotel.branding?.mainImage || hotel.branding?.mainImageUrl].filter(Boolean))[0] || null,
     heroImageUrl: hotel.hero_image_url || '',
     heroImages: normalizeMediaItems(hotel.branding?.heroImages || [hotel.hero_image_url].filter(Boolean)),
     showcaseImages: normalizeMediaItems(hotel.branding?.showcaseImages || [hotel.branding?.showcaseImageUrl].filter(Boolean)).slice(0, 3),

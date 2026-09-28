@@ -2,6 +2,7 @@ import {
   Bath,
   BedDouble,
   CalendarDays,
+  Check,
   CreditCard,
   Dumbbell,
   Gift,
@@ -12,6 +13,7 @@ import {
   Utensils,
   Waves,
   Wifi,
+  X,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
@@ -43,6 +45,7 @@ export function HotelExperience() {
   const { data, loading, error } = useAsync(() => apiFetch('/tenant'))
   const [defaultCheckIn, defaultCheckOut] = defaultDates()
   const [search, setSearch] = useState({ checkIn: defaultCheckIn, checkOut: defaultCheckOut, adults: 1, children: 0, roomsCount: 1 })
+  const [offersModalOpen, setOffersModalOpen] = useState(false)
 
   if (loading) return <LoadingState label="Opening hotel" />
   if (error) return <TenantError error={error} />
@@ -50,8 +53,11 @@ export function HotelExperience() {
   const { hotel, rooms, amenities = [] } = data
   const faqs = data.faqs || []
   const offers = data.offers || []
-  const allRoomOffers = offers.filter(isAllRoomOffer)
-  const heroImages = getMediaUrls(hotel.branding?.heroImages)
+  const showcaseOffers = offers.filter(isShowcaseOffer)
+  const bookingOffers = offers.filter(isAppliedOffer)
+  const allRoomOffers = bookingOffers.filter(isAllRoomOffer)
+  const offerHighlights = offers
+  const heroImages = getMediaUrls([hotel.branding?.mainImage || hotel.branding?.mainImageUrl].filter(Boolean)).concat(getMediaUrls(hotel.branding?.heroImages))
   const showcaseImages = getMediaUrls(hotel.branding?.showcaseImages || [hotel.branding?.showcaseImageUrl].filter(Boolean)).slice(0, 3)
   const heroImage = heroImages[0] || hotel.hero_image_url || fallbackHotelImage
   const featuredRoom = rooms[0]
@@ -121,8 +127,9 @@ export function HotelExperience() {
 
       <div className="relative bg-white">
         <section id="offers" className="container-page pt-10 scroll-mt-24">
-          <OfferShowcase offers={allRoomOffers} hasRoomSpecificOffers={offers.length > allRoomOffers.length} bookingUrl={bookingUrl} />
+          <OfferShowcase offers={offerHighlights} hasRoomSpecificOffers={bookingOffers.length > allRoomOffers.length} bookingUrl={bookingUrl} showingShowcase={Boolean(showcaseOffers.length)} onViewOffers={() => setOffersModalOpen(true)} />
         </section>
+        <OffersModal open={offersModalOpen} offers={offerHighlights} bookingUrl={bookingUrl} onClose={() => setOffersModalOpen(false)} />
 
         <section id="rooms" className="container-page section-pad scroll-mt-24">
           <div className="page-heading">
@@ -135,7 +142,7 @@ export function HotelExperience() {
           </div>
           {homepageRooms.length ? (
             <Stagger className="grid gap-4">
-              {homepageRooms.map((room) => <RoomShowcase key={room.id} room={room} bookingUrl={bookingUrl} offers={offersForRoom(offers, room.id)} />)}
+              {homepageRooms.map((room) => <RoomShowcase key={room.id} room={room} bookingUrl={bookingUrl} offers={offersForRoom(bookingOffers, room.id)} />)}
             </Stagger>
           ) : (
             <FadeIn className="panel p-8 text-center">
@@ -223,7 +230,7 @@ function premiumHotelSummary(hotel) {
   return raw
 }
 
-function OfferShowcase({ offers, hasRoomSpecificOffers = false, bookingUrl }) {
+function OfferShowcase({ offers, hasRoomSpecificOffers = false, bookingUrl, showingShowcase = false, onViewOffers }) {
   const visibleOffers = offers.slice(0, 8)
   if (!visibleOffers.length) {
     return (
@@ -234,7 +241,10 @@ function OfferShowcase({ offers, hasRoomSpecificOffers = false, bookingUrl }) {
         <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-stone-600">
           {hasRoomSpecificOffers ? 'Room-specific offers are shown below on their eligible room categories.' : 'Hotel offers will appear here as soon as the team publishes them.'}
         </p>
-        <Link to={bookingUrl} className="btn-primary mt-5 w-full sm:w-auto"><CalendarDays size={18} /> Book stay</Link>
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+          <Link to={bookingUrl} className="btn-primary w-full sm:w-auto"><CalendarDays size={18} /> Book stay</Link>
+          <button type="button" className="btn-secondary w-full sm:w-auto" onClick={onViewOffers}><Gift size={18} /> View offers</button>
+        </div>
       </FadeIn>
     )
   }
@@ -244,13 +254,16 @@ function OfferShowcase({ offers, hasRoomSpecificOffers = false, bookingUrl }) {
       <div className="relative">
         <div className="mb-5 flex flex-col justify-between gap-3 md:flex-row md:items-end">
           <div>
-            <p className="eyebrow">Live offers</p>
-            <h2 className="mt-2 text-3xl font-black text-charcoal md:text-4xl">Book direct benefits</h2>
+            <p className="eyebrow">{showingShowcase ? 'All live offers' : 'Live offers'}</p>
+            <h2 className="mt-2 text-3xl font-black text-charcoal md:text-4xl">Direct booking benefits</h2>
             <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-stone-600">
-              These offers apply to every room. Room-specific offers appear on the eligible room categories below.
+              {showingShowcase ? 'Showcase offers appear here with booking offers. Checkout discounts still apply only on eligible room categories.' : 'These offers apply to every room. Room-specific offers appear on the eligible room categories below.'}
             </p>
           </div>
-          <Link to={bookingUrl} className="btn-dark shrink-0"><CalendarDays size={18} /> Book stay</Link>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button type="button" className="btn-secondary shrink-0" onClick={onViewOffers}><Gift size={18} /> View offers</button>
+            <Link to={bookingUrl} className="btn-dark shrink-0"><CalendarDays size={18} /> Book stay</Link>
+          </div>
         </div>
         <AutoScrollRow ariaLabel="Live hotel offers" step={360}>
           {visibleOffers.map((offer) => (
@@ -266,13 +279,17 @@ function OfferShowcase({ offers, hasRoomSpecificOffers = false, bookingUrl }) {
                 <span className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-black uppercase text-white" style={{ backgroundColor: offer.highlight_color || '#7f1d1d' }}>
                   <Gift size={15} /> {offer.badge || (offer.audience_type === 'repeat_guest' ? 'For you' : 'Offer')}
                 </span>
-                <span className="text-xs font-bold uppercase text-stone-500">{offer.audience_type === 'repeat_guest' ? 'Personalized' : 'General'}</span>
+                <span className="text-xs font-bold uppercase text-stone-500">{isShowcaseOffer(offer) ? 'Showcase' : offer.audience_type === 'repeat_guest' ? 'Personalized' : 'General'}</span>
               </div>
               <h3 className="mt-4 text-xl font-extrabold">{offer.title}</h3>
               <p className="mt-2 text-2xl font-black text-amberline">{formatOfferValue(offer)}</p>
               <p className="mt-2 text-sm leading-6 text-stone-600">{offer.description}</p>
               <div className="mt-auto pt-5">
-                <Link to={appendQueryParam(bookingUrl, 'offerId', offer.id)} className="btn-primary w-full"><CalendarDays size={17} /> Apply and book</Link>
+                {isShowcaseOffer(offer)
+                  ? <Link to={bookingUrl} className="btn-primary w-full"><CalendarDays size={17} /> Book stay</Link>
+                  : isAllRoomOffer(offer)
+                    ? <Link to={appendQueryParam(bookingUrl, 'offerId', offer.id)} className="btn-primary w-full"><CalendarDays size={17} /> Apply and book</Link>
+                    : <a href="#rooms" className="btn-primary w-full"><CalendarDays size={17} /> View eligible rooms</a>}
               </div>
               </div>
             </motion.article>
@@ -283,10 +300,106 @@ function OfferShowcase({ offers, hasRoomSpecificOffers = false, bookingUrl }) {
   )
 }
 
+function OffersModal({ open, offers = [], bookingUrl, onClose }) {
+  const visibleOffers = offers.filter(Boolean)
+  return (
+    <AnimatePresence>
+      {open ? (
+        <motion.div
+          className="fixed inset-0 z-50 grid place-items-center bg-charcoal/70 p-3 backdrop-blur-sm sm:p-6"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+        >
+          <motion.section
+            className="max-h-[88vh] w-full max-w-5xl overflow-hidden rounded-lg border border-white/70 bg-white shadow-2xl"
+            initial={{ y: 24, opacity: 0, scale: 0.98 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: 20, opacity: 0, scale: 0.98 }}
+            transition={{ duration: 0.22 }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-mist bg-bone px-4 py-4 sm:px-5">
+              <div>
+                <p className="eyebrow">Hotel offers</p>
+                <h2 className="mt-1 text-2xl font-black text-charcoal sm:text-3xl">Full offer details</h2>
+                <p className="mt-1 text-sm font-semibold leading-6 text-stone-600">Showcase offers describe hotel benefits. Applied offers can be selected during booking when eligible.</p>
+              </div>
+              <button type="button" className="grid h-10 w-10 shrink-0 place-items-center rounded-md border border-mist bg-white text-charcoal shadow-sm" onClick={onClose} aria-label="Close offers">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="max-h-[calc(88vh-120px)] overflow-y-auto p-4 sm:p-5">
+              {visibleOffers.length ? (
+                <div className="grid gap-3 md:grid-cols-2">
+                  {visibleOffers.map((offer) => (
+                    <article key={offer.id || offer.title} className="flex min-h-64 flex-col rounded-lg border border-mist bg-white p-4 shadow-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-black uppercase text-white" style={{ backgroundColor: offer.highlight_color || '#7f1d1d' }}>
+                          <Gift size={14} /> {offer.badge || (isShowcaseOffer(offer) ? 'Showcase' : 'Offer')}
+                        </span>
+                        <span className="rounded-md bg-bone px-2 py-1 text-xs font-black uppercase text-stone-600">{offerTypeLabel(offer)}</span>
+                      </div>
+                      <h3 className="mt-4 text-xl font-extrabold text-charcoal">{offer.title}</h3>
+                      <p className="mt-2 text-2xl font-black text-amberline">{formatOfferValue(offer)}</p>
+                      <p className="mt-3 text-sm font-semibold leading-6 text-stone-600">{offer.description || 'Offer details will be confirmed by the hotel team.'}</p>
+                      <div className="mt-4 grid gap-2 text-xs font-bold uppercase tracking-[0.1em] text-stone-500 sm:grid-cols-2">
+                        <span className="rounded-md bg-bone px-3 py-2">Starts {formatOfferDate(offer.starts_at)}</span>
+                        <span className="rounded-md bg-bone px-3 py-2">Ends {formatOfferDate(offer.ends_at)}</span>
+                      </div>
+                      <div className="mt-auto grid gap-2 pt-5 sm:grid-cols-2">
+                        {isShowcaseOffer(offer) || !isAllRoomOffer(offer)
+                          ? <Link to={bookingUrl} className="btn-primary !min-h-10 !px-3"><CalendarDays size={17} /> Book stay</Link>
+                          : <Link to={appendQueryParam(bookingUrl, 'offerId', offer.id)} className="btn-primary !min-h-10 !px-3"><CalendarDays size={17} /> Book stay</Link>}
+                        {!isShowcaseOffer(offer) && isAllRoomOffer(offer)
+                          ? <Link to={appendQueryParam(bookingUrl, 'offerId', offer.id)} className="btn-secondary !min-h-10 !px-3" onClick={onClose}><Maximize2 size={16} /> View</Link>
+                          : <a href="#rooms" className="btn-secondary !min-h-10 !px-3" onClick={onClose}><Maximize2 size={16} /> View</a>}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-mist bg-bone p-5 text-center">
+                  <h3 className="text-xl font-black text-charcoal">No live offers yet</h3>
+                  <p className="mt-2 text-sm font-semibold leading-6 text-stone-600">The hotel team has not published an active offer for the selected dates.</p>
+                  <Link to={bookingUrl} className="btn-primary mt-4"><CalendarDays size={18} /> Book stay</Link>
+                </div>
+              )}
+            </div>
+          </motion.section>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  )
+}
+
+function formatOfferDate(value) {
+  if (!value) return 'hotel schedule'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'hotel schedule'
+  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function offerTypeLabel(offer) {
+  if (isShowcaseOffer(offer)) return 'Showcase'
+  if (!isAllRoomOffer(offer)) return 'Room offer'
+  return offer?.audience_type === 'repeat_guest' ? 'Guest offer' : 'Booking offer'
+}
+
 function formatOfferValue(offer) {
+  if (isShowcaseOffer(offer)) return offer.badge || 'Direct benefit'
   const value = Number(offer.discount_value || 0)
   if (offer.discount_type === 'percentage') return `${value}% off`
   return `Rs ${value.toLocaleString('en-IN')} off`
+}
+
+function isAppliedOffer(offer) {
+  return (offer?.offer_kind || 'applied') === 'applied'
+}
+
+function isShowcaseOffer(offer) {
+  return offer?.offer_kind === 'showcase'
 }
 
 function isAllRoomOffer(offer) {
@@ -351,6 +464,7 @@ function ImageSlideshow({ images, alt }) {
 }
 
 function RoomShowcase({ room, bookingUrl, offers = [] }) {
+  const [descriptionOpen, setDescriptionOpen] = useState(false)
   const displayRoom = getDisplayRoomForGuests(room, 1)
   const displayPrice = displayRoom.offer_price || displayRoom.base_price
   const availabilityUrl = `${bookingUrl}&roomTypeId=${room.id}`
@@ -366,10 +480,8 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
         <div className="flex min-w-0 flex-col gap-3 p-4 sm:p-5">
           <p className="text-xs font-bold uppercase tracking-[0.12em] text-stone-500">{displayRoom.bed_type || 'Curated stay'}</p>
           <h3 className="text-2xl font-bold leading-tight">{displayRoom.name}</h3>
-          <p className="line-clamp-2 text-sm leading-6 text-stone-600">{displayRoom.description || 'A composed room category prepared for comfort, clarity, and direct booking.'}</p>
-          <div className="flex flex-wrap gap-2">
-            {(room.amenities || []).slice(0, 3).map((amenity) => <span key={amenity} className="rounded-md bg-bone px-3 py-2 text-xs font-bold text-stone-600">{amenity}</span>)}
-          </div>
+          <ExpandableRoomDescription description={displayRoom.description} open={descriptionOpen} onToggle={() => setDescriptionOpen((current) => !current)} />
+          <CompactRoomAmenityList amenities={getRoomAmenityItems(room)} limit={6} />
           <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1.5fr)_minmax(190px,0.8fr)]">
             {offers.length ? <HomeRoomOfferPicker offers={offers} availabilityUrl={availabilityUrl} /> : null}
             <div className={`rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 ${offers.length ? '' : 'sm:col-span-2'}`}>
@@ -397,6 +509,48 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
       </article>
     </StaggerItem>
   )
+}
+
+function ExpandableRoomDescription({ description, open, onToggle, wordLimit = 4 }) {
+  const text = String(description || 'A composed room category prepared for comfort, clarity, and direct booking.').replace(/\s+/g, ' ').trim()
+  const words = text.split(' ').filter(Boolean)
+  const canExpand = words.length > wordLimit
+  const preview = canExpand ? `${words.slice(0, wordLimit).join(' ')}...` : text
+  return (
+    <div className="text-sm leading-6 text-stone-600">
+      <span>{open || !canExpand ? text : preview}</span>
+      {canExpand ? (
+        <button type="button" className="ml-2 font-black text-[#7f1d1d] underline-offset-4 hover:underline" onClick={onToggle}>
+          {open ? 'Show less' : 'Read more'}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+function CompactRoomAmenityList({ amenities = [], limit = 6 }) {
+  const visible = amenities.filter((amenity) => amenity?.name).slice(0, limit)
+  const hiddenCount = Math.max(0, amenities.length - visible.length)
+  if (!visible.length) return null
+  return (
+    <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+      {visible.map((amenity) => (
+        <div key={amenity.id || amenity.name} className="flex min-w-0 items-center gap-2 text-sm font-semibold text-stone-700">
+          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-emerald-50 text-emerald-700">
+            <Check size={14} strokeWidth={2.4} />
+          </span>
+          <span className="min-w-0 truncate">{amenity.name}</span>
+        </div>
+      ))}
+      {hiddenCount ? <span className="text-sm font-black text-amberline">+ {hiddenCount} more</span> : null}
+    </div>
+  )
+}
+
+function getRoomAmenityItems(room) {
+  const amenityItems = Array.isArray(room?.amenity_items) ? room.amenity_items : []
+  if (amenityItems.length) return amenityItems
+  return (room?.amenities || []).map((name) => ({ name }))
 }
 
 function HomeRoomOfferPicker({ offers, availabilityUrl }) {

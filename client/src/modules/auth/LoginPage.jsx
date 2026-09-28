@@ -3,6 +3,7 @@ import { CheckCircle2, KeyRound, Loader2, LogIn, Mail, RotateCcw, UserPlus } fro
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FadeIn } from '../../components/ui/Motion.jsx'
 import { GuideToast } from '../../components/ui/GuideToast.jsx'
+import { useAsync } from '../../hooks/useAsync.js'
 import {
   loginWithEmail,
   loginWithGoogle,
@@ -17,6 +18,7 @@ import { buildTenantPath, navigateToHotelPath, resolveTenantFromLocation, stripT
 
 const pendingProfileKey = 'rs-exclusive-pending-registration'
 const bookingAuthDraftKey = 'rs-exclusive-booking-auth-return'
+const fallbackLoginImage = 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1600&q=80'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -41,6 +43,11 @@ export function LoginPage() {
   const guideToastTimer = useRef(null)
   const [loading, setLoading] = useState(false)
   const { firebaseUser, isAuthenticated, loading: authLoading } = useAuth()
+  const tenantProfile = useAsync(
+    () => (tenantMode.isTenant ? apiFetch('/tenant') : Promise.resolve({ hotel: null })),
+    tenantMode.isTenant ? `login-hotel:${tenantMode.key || 'tenant'}` : 'login-group',
+  )
+  const hotel = tenantProfile.data?.hotel
 
   useEffect(() => () => window.clearTimeout(guideToastTimer.current), [])
 
@@ -243,18 +250,21 @@ export function LoginPage() {
     : mode === 'register'
       ? 'Register once and use the same account for every hotel in the group.'
       : 'Use the same method you used while registering on any group hotel website.'
+  const visualImage = getLoginVisualImage(hotel)
+  const visualName = cleanHotelName(hotel?.name || tenantDisplayName(tenantMode.key))
 
   return (
     <main className="relative overflow-hidden bg-white">
       <GuideToast toast={guideToast} />
       <section className="container-page grid min-h-[calc(100svh-72px)] items-center gap-8 py-10 lg:grid-cols-[minmax(0,1fr)_440px] lg:py-14">
         <FadeIn viewport={false} as="section" className="relative overflow-hidden rounded-lg bg-charcoal p-6 text-white shadow-panel sm:p-8 lg:min-h-[620px]">
-          <img src="https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1600&q=80" alt="" className="absolute inset-0 h-full w-full object-cover opacity-70" aria-hidden="true" />
+          <img src={visualImage} alt="" className="absolute inset-0 h-full w-full object-cover opacity-74" aria-hidden="true" />
           <div className="absolute inset-0 bg-gradient-to-r from-black/86 via-black/52 to-black/16" />
           <div className="relative flex min-h-[420px] flex-col justify-end lg:min-h-[560px]">
             <p className="text-xs font-black uppercase tracking-[0.2em] text-amber-100">{isAdminLogin ? 'Hotel console' : 'Guest access'}</p>
             <h1 className="mt-4 max-w-2xl text-4xl font-black leading-none text-white sm:text-5xl md:text-6xl">{title}</h1>
             <p className="mt-5 max-w-xl text-sm font-semibold leading-7 text-white/84 sm:text-base">{subtitle}</p>
+            {hotel ? <p className="mt-5 w-fit rounded-md border border-white/18 bg-white/12 px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-white/86 backdrop-blur-xl">{visualName}</p> : null}
           </div>
         </FadeIn>
 
@@ -337,6 +347,43 @@ function Field({ label, children }) {
 
 function GoogleMark() {
   return <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-sm font-black text-[#4285f4] shadow-sm">G</span>
+}
+
+function getLoginVisualImage(hotel) {
+  return mediaUrl(hotel?.branding?.mainImage)
+    || hotel?.branding?.mainImageUrl
+    || getMediaUrls(hotel?.branding?.heroImages)[0]
+    || hotel?.hero_image_url
+    || fallbackLoginImage
+}
+
+function getMediaUrls(items) {
+  if (!Array.isArray(items)) return []
+  return items.map(mediaUrl).filter(Boolean)
+}
+
+function mediaUrl(value) {
+  return typeof value === 'string' ? value : value?.url || value?.secureUrl || ''
+}
+
+function cleanHotelName(value) {
+  return String(value || 'Ranjeet Groups of Hotels Akola').replace(/\s+/g, ' ').trim()
+}
+
+function tenantDisplayName(value) {
+  const key = String(value || '').toLowerCase()
+  if (/(^|-)rs($|-)|rs-exclusive|r-s-exclusive/.test(key)) return 'RS Exclusive Stay & Fine Dine'
+  if (/(^|-)rg($|-)|rg-exclusive|r-g-exclusive/.test(key)) return 'RG Exclusive Stay & Fine Dine'
+  if (/ranjeet/.test(key)) return 'Ranjeet Hotel'
+  return toTitle(value)
+}
+
+function toTitle(value) {
+  return String(value || '')
+    .split(/[-_\s.]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
 }
 
 function normalizeInternalReturnTo(value) {

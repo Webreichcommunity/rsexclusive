@@ -17,7 +17,7 @@ export function ContactPanel({ hotel }) {
   const [form, setForm] = useState(defaultForm)
   const [status, setStatus] = useState({ loading: false, message: '', type: '' })
   const accessKey = hotel?.contact?.web3formsAccessKey || hotel?.branding?.web3formsAccessKey || import.meta.env.VITE_WEB3FORMS_ACCESS_KEY
-  const hotelEmail = hotel?.contact?.email || hotel?.contact?.emails?.[0] || 'bookings@example.com'
+  const hotelEmail = hotel?.contact?.email || hotel?.contact?.emails?.[0] || ''
   const phones = hotel?.contact?.phones?.length ? hotel.contact.phones : [hotel?.contact?.phone].filter(Boolean)
 
   useEffect(() => {
@@ -70,11 +70,18 @@ export function ContactPanel({ hotel }) {
           <h2 className="mt-3 text-3xl font-bold leading-tight md:text-5xl">Share a stay note with the hotel team.</h2>
           <p className="mt-4 max-w-xl text-sm leading-7 text-stone-600 md:text-base">Rate your experience and send a clear message to the property team. Logged-in guest details are filled automatically.</p>
           <div className="mt-6 grid gap-3 text-sm font-semibold text-stone-600">
-            <span className="flex items-center gap-2 rounded-lg border border-stone-200 bg-white p-4"><Mail size={17} className="shrink-0 text-amberline" /> <span className="min-w-0 break-words">{hotelEmail}</span></span>
-            {phones[0] ? <span className="flex items-center gap-2 rounded-lg border border-stone-200 bg-white p-4"><Phone size={17} className="shrink-0 text-amberline" /> <span className="min-w-0 break-words">{phones.join(', ')}</span></span> : null}
+            {hotelEmail ? <span className="flex items-center gap-2 rounded-lg border border-stone-200 bg-white p-4"><Mail size={17} className="shrink-0 text-amberline" /> <span className="min-w-0 break-words">{hotelEmail}</span></span> : null}
+            {phones[0] ? (
+              <span className="flex items-start gap-2 rounded-lg border border-stone-200 bg-white p-4">
+                <Phone size={17} className="mt-0.5 shrink-0 text-amberline" />
+                <span className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 break-words">
+                  {phones.map((phone, index) => <PhoneLink key={phone} phone={phone} suffix={index < phones.length - 1 ? ',' : ''} />)}
+                </span>
+              </span>
+            ) : null}
             <span className="flex items-start gap-2 rounded-lg border border-stone-200 bg-white p-4"><MapPin size={19} className="mt-0.5 shrink-0 text-amberline" /> <span className="line-clamp-2 min-w-0 leading-6">{formatAddress(hotel)}</span></span>
           </div>
-          {!accessKey ? (
+          {!accessKey && hotelEmail ? (
             <a className="btn-secondary mt-6" href={`mailto:${hotelEmail}`}>
               <MessageCircle size={18} /> Email hotel
             </a>
@@ -110,6 +117,14 @@ function Field({ label, children }) {
   return <label><span className="label">{label}</span>{children}</label>
 }
 
+function PhoneLink({ phone, suffix = '' }) {
+  return (
+    <a className="font-bold text-charcoal underline-offset-4 transition hover:text-amberline hover:underline" href={`tel:${phoneDialValue(phone)}`}>
+      {phone}{suffix}
+    </a>
+  )
+}
+
 function StarRating({ value, onChange }) {
   return (
     <div className="flex h-12 items-center gap-1 rounded-md border border-mist bg-white px-3">
@@ -141,4 +156,12 @@ function cleanCity(value) {
   const city = String(value || '').replace(/\s+/g, ' ').trim()
   if (!city || /exlusive|exclusive|fine dine|stay/i.test(city)) return 'Akola'
   return city
+}
+
+function phoneDialValue(value) {
+  const raw = String(value || '').trim()
+  const hasPlus = raw.startsWith('+')
+  const digits = raw.replace(/\D/g, '')
+  if (!digits) return raw
+  return hasPlus ? `+${digits}` : digits
 }

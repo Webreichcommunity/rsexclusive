@@ -8,6 +8,7 @@ import { query, transaction } from '../db/pool.js'
 import { deleteFirebaseUser } from '../services/firebaseAdminService.js'
 import { recordActivity } from '../services/activityService.js'
 import { ensureBookingReceipt } from '../services/bookingService.js'
+import { ensureOfferKindColumn, ensureRoomSortOrderColumn } from '../services/hotelService.js'
 import { createAsyncRouter } from '../utils/asyncRouter.js'
 import { badRequest, conflict, notFound } from '../utils/errors.js'
 
@@ -43,6 +44,7 @@ const roomTypeSchema = z.object({
     alt: z.string().optional(),
   })).default([]),
   showOnHomepage: z.coerce.boolean().default(false),
+  sortOrder: z.coerce.number().int().min(0).max(10000).default(1000),
   physicalRooms: z.coerce.number().int().positive().default(1),
   inventoryDays: z.coerce.number().int().min(1).max(730).default(180),
   roomNumberPrefix: z.string().optional(),
@@ -149,11 +151,12 @@ const faqSchema = z.object({
 })
 
 const offerSchema = z.object({
+  offerKind: z.enum(['applied', 'showcase']).default('applied'),
   title: z.string().min(2),
   description: z.string().min(5),
   code: z.string().max(40).optional(),
   discountType: z.enum(['percentage', 'fixed']).default('percentage'),
-  discountValue: z.coerce.number().nonnegative(),
+  discountValue: z.coerce.number().nonnegative().default(0),
   roomTypeIds: z.array(z.string().uuid()).default([]),
   startsAt: z.coerce.date(),
   endsAt: z.coerce.date(),
@@ -787,6 +790,7 @@ adminRoutes.patch('/cancellation-requests/:requestId', requireRole('hotel_admin'
 })
 
 adminRoutes.get('/rooms', async (req, res) => {
+  await ensureRoomSortOrderColumn()
   const { rows } = await query(
     `SELECT rt.*,
       (SELECT count(*)::int FROM rooms r WHERE r.room_type_id = rt.id AND r.status = 'active') AS physical_rooms,
@@ -795,7 +799,7 @@ adminRoutes.get('/rooms', async (req, res) => {
       (SELECT min(ri.total_rooms - ri.reserved_rooms)::int FROM room_inventory ri WHERE ri.room_type_id = rt.id AND ri.stay_date >= current_date AND ri.closed = false) AS lowest_available_rooms
      FROM room_types rt
      WHERE rt.hotel_id = $1
-     ORDER BY rt.base_price ASC`,
+     ORDER BY rt.sort_order ASC, rt.created_at DESC, rt.base_price ASC`,
     [req.hotel.id],
   )
   res.json({ rooms: rows })
@@ -808,13 +812,14 @@ adminRoutes.post('/rooms', requireRole('hotel_admin', 'super_admin'), validate(r
 
   const room = await transaction(async (db) => {
     await assertHomepageRoomLimit(db, req.hotel.id, null, body.showOnHomepage)
+    await ensureRoomSortOrderColumn(db)
     const slug = await uniqueRoomSlug(db, req.hotel.id, body.name, body.slug)
     const { rows } = await db.query(
       `INSERT INTO room_types (
         hotel_id, name, slug, description, occupancy_adults, occupancy_children,
-        base_price, offer_price, rate_options, size_sqft, bed_type, amenities, amenity_items, hero_image_url, gallery, show_on_homepage
+        base_price, offer_price, rate_options, size_sqft, bed_type, amenities, amenity_items, hero_image_url, gallery, show_on_homepage, sort_order
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17)
       RETURNING *`,
       [
         req.hotel.id,
@@ -833,6 +838,7 @@ adminRoutes.post('/rooms', requireRole('hotel_admin', 'super_admin'), validate(r
         body.heroImageUrl || null,
         JSON.stringify(body.gallery),
         body.showOnHomepage,
+        body.sortOrder,
       ],
     )
     const roomType = rows[0]
@@ -874,6 +880,7 @@ adminRoutes.post('/rooms', requireRole('hotel_admin', 'super_admin'), validate(r
 adminRoutes.patch('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'), validate(roomUpdateSchema), async (req, res) => {
   const body = req.body
   const result = await transaction(async (db) => {
+    await ensureRoomSortOrderColumn(db)
     if (body.showOnHomepage !== undefined) {
       await assertHomepageRoomLimit(db, req.hotel.id, req.params.roomTypeId, body.showOnHomepage)
     }
@@ -906,8 +913,9 @@ adminRoutes.patch('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'
          gallery = coalesce($14::jsonb, gallery),
          show_on_homepage = coalesce($15::boolean, show_on_homepage),
          active = coalesce($16::boolean, active),
+         sort_order = coalesce($17::int, sort_order),
          updated_at = now()
-       WHERE id = $17 AND hotel_id = $18
+       WHERE id = $18 AND hotel_id = $19
        RETURNING *`,
       [
         body.name,
@@ -926,6 +934,7 @@ adminRoutes.patch('/rooms/:roomTypeId', requireRole('hotel_admin', 'super_admin'
         body.gallery ? JSON.stringify(body.gallery) : null,
         body.showOnHomepage,
         body.active,
+        body.sortOrder,
         req.params.roomTypeId,
         req.hotel.id,
       ],
@@ -1685,6 +1694,7 @@ adminRoutes.delete('/faqs/:faqId', requireRole('hotel_admin', 'super_admin'), as
 })
 
 adminRoutes.get('/offers', async (req, res) => {
+  await ensureOfferKindColumn()
   const { rows } = await query(
     `SELECT *
      FROM offers
@@ -1696,31 +1706,35 @@ adminRoutes.get('/offers', async (req, res) => {
 })
 
 adminRoutes.post('/offers', requireRole('hotel_admin', 'super_admin'), validate(offerSchema), async (req, res) => {
+  await ensureOfferKindColumn()
   if (req.body.endsAt <= req.body.startsAt) throw badRequest('Offer end date must be after start date', 'invalid_offer_dates')
-  await assertOfferRoomTargets(req.hotel.id, req.body.roomTypeIds)
+  const offerKind = req.body.offerKind || 'applied'
+  const roomTypeIds = offerKind === 'showcase' ? [] : req.body.roomTypeIds
+  if (offerKind === 'applied') await assertOfferRoomTargets(req.hotel.id, roomTypeIds)
   const { rows } = await query(
     `INSERT INTO offers (
-       hotel_id, title, description, code, discount_type, discount_value, starts_at,
+       hotel_id, offer_kind, title, description, code, discount_type, discount_value, starts_at,
        ends_at, active, image_url, audience_type, min_completed_bookings, badge, highlight_color, room_type_ids
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::uuid[])
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::uuid[])
      RETURNING *`,
     [
       req.hotel.id,
+      offerKind,
       req.body.title,
       req.body.description,
-      req.body.code || null,
-      req.body.discountType,
-      req.body.discountValue,
+      offerKind === 'showcase' ? null : req.body.code || null,
+      offerKind === 'showcase' ? 'percentage' : req.body.discountType,
+      offerKind === 'showcase' ? 0 : req.body.discountValue,
       req.body.startsAt,
       req.body.endsAt,
       req.body.active,
-      req.body.imageUrl || null,
-      req.body.audienceType,
-      req.body.minCompletedBookings,
+      offerKind === 'showcase' ? null : req.body.imageUrl || null,
+      offerKind === 'showcase' ? 'general' : req.body.audienceType,
+      offerKind === 'showcase' ? 0 : req.body.minCompletedBookings,
       req.body.badge || '',
       req.body.highlightColor || '#f59e0b',
-      req.body.roomTypeIds || [],
+      roomTypeIds || [],
     ],
   )
   await recordMediaAssets(req.hotel.id, 'offer', rows[0].id, collectOfferMedia(rows[0]), rows[0].title)
@@ -1735,34 +1749,39 @@ adminRoutes.post('/offers', requireRole('hotel_admin', 'super_admin'), validate(
 })
 
 adminRoutes.patch('/offers/:offerId', requireRole('hotel_admin', 'super_admin'), validate(offerSchema.partial()), async (req, res) => {
+  await ensureOfferKindColumn()
   const body = req.body
-  if (body.roomTypeIds !== undefined) await assertOfferRoomTargets(req.hotel.id, body.roomTypeIds)
   const result = await transaction(async (db) => {
     const { rows: previousRows } = await db.query(
       'SELECT * FROM offers WHERE id = $1 AND hotel_id = $2 FOR UPDATE',
       [req.params.offerId, req.hotel.id],
     )
     if (!previousRows[0]) throw notFound('Offer not found')
+    const nextOfferKind = body.offerKind || previousRows[0].offer_kind || 'applied'
+    const nextRoomTypeIds = nextOfferKind === 'showcase' ? [] : body.roomTypeIds
+    if (nextOfferKind === 'applied' && body.roomTypeIds !== undefined) await assertOfferRoomTargets(req.hotel.id, nextRoomTypeIds)
     const { rows } = await db.query(
       `UPDATE offers SET
-         title = coalesce($1, title),
-         description = coalesce($2, description),
-         code = coalesce($3, code),
-         discount_type = coalesce($4, discount_type),
-         discount_value = coalesce($5::numeric, discount_value),
-         starts_at = coalesce($6::timestamptz, starts_at),
-         ends_at = coalesce($7::timestamptz, ends_at),
-         active = coalesce($8::boolean, active),
-         image_url = CASE WHEN $9::text IS NULL THEN image_url ELSE nullif($9, '') END,
-         audience_type = coalesce($10, audience_type),
-         min_completed_bookings = coalesce($11::int, min_completed_bookings),
-         badge = coalesce($12, badge),
-         highlight_color = coalesce($13, highlight_color),
-         room_type_ids = coalesce($14::uuid[], room_type_ids),
+         offer_kind = coalesce($1, offer_kind),
+         title = coalesce($2, title),
+         description = coalesce($3, description),
+         code = CASE WHEN $1 = 'showcase' THEN null ELSE coalesce($4, code) END,
+         discount_type = CASE WHEN $1 = 'showcase' THEN 'percentage' ELSE coalesce($5, discount_type) END,
+         discount_value = CASE WHEN $1 = 'showcase' THEN 0 ELSE coalesce($6::numeric, discount_value) END,
+         starts_at = coalesce($7::timestamptz, starts_at),
+         ends_at = coalesce($8::timestamptz, ends_at),
+         active = coalesce($9::boolean, active),
+         image_url = CASE WHEN $1 = 'showcase' THEN null WHEN $10::text IS NULL THEN image_url ELSE nullif($10, '') END,
+         audience_type = CASE WHEN $1 = 'showcase' THEN 'general' ELSE coalesce($11, audience_type) END,
+         min_completed_bookings = CASE WHEN $1 = 'showcase' THEN 0 ELSE coalesce($12::int, min_completed_bookings) END,
+         badge = coalesce($13, badge),
+         highlight_color = coalesce($14, highlight_color),
+         room_type_ids = CASE WHEN $1 = 'showcase' THEN '{}'::uuid[] ELSE coalesce($15::uuid[], room_type_ids) END,
          updated_at = now()
-       WHERE id = $15 AND hotel_id = $16
+       WHERE id = $16 AND hotel_id = $17
        RETURNING *`,
       [
+        nextOfferKind,
         body.title,
         body.description,
         body.code,
@@ -1776,7 +1795,7 @@ adminRoutes.patch('/offers/:offerId', requireRole('hotel_admin', 'super_admin'),
         body.minCompletedBookings,
         body.badge,
         body.highlightColor,
-        body.roomTypeIds,
+        nextRoomTypeIds,
         req.params.offerId,
         req.hotel.id,
       ],
@@ -1896,6 +1915,7 @@ function collectHotelMedia(hotelOrPayload = {}) {
   const items = []
   addMediaItem(items, hotelOrPayload.hero_image_url || hotelOrPayload.heroImageUrl, 'hotelHero')
   addMediaItem(items, branding.logoUrl, 'logo')
+  addMediaItem(items, branding.mainImage || branding.mainImageUrl, 'mainImage')
   addMediaItem(items, branding.showcaseImageUrl, 'showcaseImage')
   addMediaItem(items, branding.diningImageUrl, 'diningImage')
   for (const item of normalizeMediaList(branding.heroImages)) addMediaItem(items, item, 'heroImages')

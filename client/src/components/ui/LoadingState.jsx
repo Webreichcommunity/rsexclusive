@@ -30,10 +30,10 @@ export function LoadingState({ label = 'Loading', brand }) {
 }
 
 function getLoadingBrand() {
-  if (typeof window === 'undefined') return 'R.S. Exclusive'
+  if (typeof window === 'undefined') return 'Ranjeet Groups of Hotels Akola'
   const params = new URLSearchParams(window.location.search)
-  const tenant = params.get('hotel') || safeLocalStorage('rs-exclusive-local-tenant')
-  return tenant ? toTitle(tenant) : 'R.S. Exclusive'
+  const tenant = params.get('hotel') || pathTenant() || safeLocalStorage('rs-exclusive-local-tenant')
+  return tenant ? tenantDisplayName(tenant) : 'Ranjeet Groups of Hotels Akola'
 }
 
 function safeLocalStorage(key) {
@@ -50,4 +50,18 @@ function toTitle(value) {
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ')
+}
+
+function pathTenant() {
+  const segment = String(window.location.pathname || '').split('/').filter(Boolean)[0] || ''
+  const reserved = new Set(['admin', 'api', 'assets', 'book', 'confirmation', 'login', 'receipts', 'rooms', 'super-admin', 'account', 'faq', 'terms'])
+  return reserved.has(segment) ? '' : segment
+}
+
+function tenantDisplayName(value) {
+  const key = String(value || '').toLowerCase()
+  if (/(^|-)rs($|-)|rs-exclusive|r-s-exclusive/.test(key)) return 'RS Exclusive Stay & Fine Dine'
+  if (/(^|-)rg($|-)|rg-exclusive|r-g-exclusive/.test(key)) return 'RG Exclusive Stay & Fine Dine'
+  if (/ranjeet/.test(key)) return 'Ranjeet Hotel'
+  return toTitle(value)
 }

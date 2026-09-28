@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ensureRoomSortOrderColumn } from './hotelService.js'
 import { badRequest } from '../utils/errors.js'
 
 export const availabilitySchema = z.object({
@@ -40,6 +41,7 @@ export function assertValidStay(checkIn, checkOut) {
 }
 
 export async function searchAvailability(db, hotelId, input) {
+  await ensureRoomSortOrderColumn(db)
   const nights = assertValidStay(input.checkIn, input.checkOut)
   const checkIn = toDateOnly(input.checkIn)
   const checkOut = toDateOnly(input.checkOut)
@@ -89,6 +91,7 @@ export async function searchAvailability(db, hotelId, input) {
          rt.hero_image_url,
          rt.gallery,
          rt.show_on_homepage,
+         rt.sort_order,
          greatest(0, $5::int - coalesce((rt.selected_rate->>'occupancyAdults')::int, rt.occupancy_adults))::int AS extra_bed_count,
          (coalesce((rt.selected_rate->>'occupancyAdults')::int, rt.occupancy_adults) < $5::int)::boolean AS extra_bed_recommended,
          min(ri.total_rooms - ri.reserved_rooms)::int AS available_rooms,
@@ -129,13 +132,14 @@ export async function searchAvailability(db, hotelId, input) {
          rt.amenity_items,
          rt.hero_image_url,
          rt.gallery,
-         rt.show_on_homepage
+         rt.show_on_homepage,
+         rt.sort_order
        HAVING count(ri.id) = ${nights}
           AND min(ri.total_rooms - ri.reserved_rooms) >= $4
      )
      SELECT *, $4::int AS requested_rooms, $3::date - $2::date AS nights
      FROM available
-     ORDER BY subtotal ASC`,
+     ORDER BY sort_order ASC, subtotal ASC`,
     params,
   )
 

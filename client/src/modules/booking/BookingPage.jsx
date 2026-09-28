@@ -112,7 +112,7 @@ export function BookingPage() {
 
   const allRooms = useMemo(() => data?.rooms || [], [data])
   const bookableAmenities = useMemo(() => data?.amenities || [], [data])
-  const offers = useMemo(() => data?.offers || [], [data])
+  const offers = useMemo(() => (data?.offers || []).filter(isAppliedOffer), [data])
   const availableLoyaltyPoints = Number(data?.loyaltyPoints || 0)
   const loyaltyRedemptionMinPoints = Math.max(0, Number(data?.hotel?.policies?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
   const loyaltyRedeemEligible = availableLoyaltyPoints >= loyaltyRedemptionMinPoints
@@ -885,6 +885,7 @@ function OfferChoiceCard({ offer, selected, onSelect, compact = false }) {
 }
 
 function RoomCard({ room, adults, searched, selected, loading, offers, selectedOfferId, offer, nights, roomsCount, onSelectOffer, onDetails, onBook }) {
+  const [descriptionOpen, setDescriptionOpen] = useState(false)
   const displayRoom = getDisplayRoomForGuests(room, adults)
   const unavailable = searched && Number(room.available_rooms || 0) < 1
   const extraBedCount = Number(displayRoom.extra_bed_count || 0)
@@ -909,11 +910,9 @@ function RoomCard({ room, adults, searched, selected, loading, offers, selectedO
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.12em] text-stone-500">{displayRoom.bed_type || 'Premium room'}</p>
           <h3 className="mt-2 text-2xl font-bold leading-tight">{displayRoom.name}</h3>
-          <p className="mt-2 line-clamp-2 text-sm leading-6 text-stone-600">{displayRoom.description}</p>
+          <ExpandableRoomDescription description={displayRoom.description} open={descriptionOpen} onToggle={() => setDescriptionOpen((current) => !current)} />
         </div>
-        <div className="flex flex-wrap gap-2">
-          {(displayRoom.amenities || []).slice(0, 3).map((amenity) => <span key={amenity} className="rounded-md bg-stone-100 px-3 py-2 text-xs font-bold text-stone-600">{amenity}</span>)}
-        </div>
+        <CompactAmenityList amenities={getRoomAmenityItems(displayRoom)} limit={6} compact />
         <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1.5fr)_minmax(190px,0.8fr)]">
           {offers.length ? (
             <RoomCardOfferPicker offers={offers} selectedOfferId={selectedOfferId} onSelectOffer={onSelectOffer} />
@@ -1068,6 +1067,23 @@ function RotatingRoomImage({ room, className }) {
           onIndex={setOpenImageIndex}
           onClose={() => setOpenImageIndex(null)}
         />
+      ) : null}
+    </div>
+  )
+}
+
+function ExpandableRoomDescription({ description, open, onToggle, wordLimit = 4 }) {
+  const text = String(description || 'A composed room category prepared for comfort, clarity, and direct booking.').replace(/\s+/g, ' ').trim()
+  const words = text.split(' ').filter(Boolean)
+  const canExpand = words.length > wordLimit
+  const preview = canExpand ? `${words.slice(0, wordLimit).join(' ')}...` : text
+  return (
+    <div className="mt-2 text-sm leading-6 text-stone-600">
+      <span>{open || !canExpand ? text : preview}</span>
+      {canExpand ? (
+        <button type="button" className="ml-2 font-black text-[#7f1d1d] underline-offset-4 hover:underline" onClick={onToggle}>
+          {open ? 'Show less' : 'Read more'}
+        </button>
       ) : null}
     </div>
   )
@@ -1507,27 +1523,28 @@ function AmenityOption({ amenity, selected, onToggle }) {
   )
 }
 
-function AmenityInfoCard({ amenity }) {
-  const [open, setOpen] = useState(false)
-  const hasDescription = Boolean(String(amenity.description || '').trim())
+function CompactAmenityList({ amenities = [], limit = 8, compact = false, className = '' }) {
+  const visible = amenities.filter((amenity) => amenity?.name).slice(0, limit)
+  const hiddenCount = Math.max(0, amenities.length - visible.length)
+  if (!visible.length) return null
+
   return (
-    <article className="min-w-0 rounded-md border border-white/70 bg-white p-3 shadow-sm">
-      <div className="flex items-start gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center text-amberline">
-          <AmenityVisual amenity={amenity} className="h-9 w-9" iconSize={24} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="break-words text-sm font-extrabold text-charcoal">{amenity.name}</p>
-          <p className="mt-1 text-xs font-black uppercase tracking-[0.12em] text-emerald-800">Included</p>
-          {hasDescription ? (
-            <button type="button" className="mt-1 text-xs font-black text-[#7f1d1d] underline-offset-4 hover:underline" onClick={() => setOpen((current) => !current)}>
-              {open ? 'Show less' : 'Read more'}
-            </button>
+    <div className={`grid gap-x-4 gap-y-2 ${compact ? 'grid-cols-1 sm:grid-cols-2' : 'sm:grid-cols-2 lg:grid-cols-3'} ${className}`}>
+      {visible.map((amenity) => (
+        <div key={amenity.id || amenity.name} className="flex min-w-0 items-center gap-2 text-sm font-semibold text-stone-700">
+          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-emerald-50 text-emerald-700">
+            <Check size={14} strokeWidth={2.4} />
+          </span>
+          {!compact ? (
+            <span className="grid h-6 w-6 shrink-0 place-items-center text-amberline">
+              <AmenityVisual amenity={amenity} className="h-5 w-5" iconSize={16} />
+            </span>
           ) : null}
+          <span className="min-w-0 truncate">{amenity.name}</span>
         </div>
-      </div>
-      {open && hasDescription ? <p className="mt-2 text-sm font-medium leading-6 text-stone-600">{amenity.description}</p> : null}
-    </article>
+      ))}
+      {hiddenCount ? <span className="text-sm font-black text-amberline">+ {hiddenCount} more</span> : null}
+    </div>
   )
 }
 
@@ -1582,17 +1599,15 @@ function RoomDetails({ room, hotel, form, nights, amenities, offers, selectedOff
               <Detail icon={Bath} label="Size" value={room.size_sqft ? `${room.size_sqft} sq ft` : 'Spacious'} />
             </div>
             {includedAmenities.length ? (
-              <div className="mt-5 rounded-lg border border-mist bg-bone/70 p-3">
+              <div className="mt-5 rounded-lg border border-mist bg-white p-4 shadow-sm">
                 <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
                   <div>
                     <p className="eyebrow">Already included</p>
                     <h3 className="mt-1 text-xl font-extrabold text-charcoal">Room amenities</h3>
                   </div>
-                  <span className="rounded-md bg-white px-3 py-2 text-xs font-black uppercase tracking-[0.12em] text-emerald-800">Included</span>
+                  <span className="rounded-md bg-emerald-50 px-3 py-2 text-xs font-black uppercase tracking-[0.12em] text-emerald-800">Included</span>
                 </div>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {includedAmenities.slice(0, 9).map((amenity) => <AmenityInfoCard key={amenity.id || amenity.name} amenity={amenity} />)}
-                </div>
+                <CompactAmenityList amenities={includedAmenities} limit={12} className="mt-4" />
               </div>
             ) : null}
             {Number(room.extra_bed_count || 0) ? (
@@ -1929,6 +1944,10 @@ function isAllRoomOffer(offer) {
 
 function offersForRoom(offers = [], roomTypeId = '') {
   return offers.filter((offer) => offerAppliesToRoom(offer, roomTypeId))
+}
+
+function isAppliedOffer(offer) {
+  return (offer?.offer_kind || 'applied') === 'applied'
 }
 
 function formatOfferValue(offer) {

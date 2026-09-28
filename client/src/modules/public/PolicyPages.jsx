@@ -142,7 +142,7 @@ function SupportCard({ hotel }) {
         <p className="mt-2 text-sm font-semibold leading-6 text-white/72">For booking, arrival, document, or policy questions, contact {hotel.name} directly.</p>
       </div>
       <div className="grid gap-3 p-5 text-sm font-semibold text-stone-700">
-        {phones.length ? <ContactLine icon={Phone} label="Phone" value={phones.join(', ')} /> : null}
+        {phones.length ? <ContactLine icon={Phone} label="Phone" value={<PhoneList phones={phones} />} /> : null}
         {hotel?.contact?.email ? <ContactLine icon={Mail} label="Email" value={hotel.contact.email} /> : null}
         <ContactLine icon={MapPin} label="Address" value={formatAddress(hotel)} />
       </div>
@@ -156,9 +156,21 @@ function ContactLine({ icon: Icon, label, value }) {
       <Icon className="mt-0.5 shrink-0 text-amberline" size={18} />
       <div className="min-w-0">
         <p className="text-xs font-black uppercase tracking-[0.12em] text-stone-500">{label}</p>
-        <p className="mt-1 break-words text-charcoal">{value || '-'}</p>
+        <div className="mt-1 break-words text-charcoal">{value || '-'}</div>
       </div>
     </div>
+  )
+}
+
+function PhoneList({ phones }) {
+  return (
+    <span className="flex flex-wrap gap-x-2 gap-y-1">
+      {phones.map((phone, index) => (
+        <a key={phone} className="font-bold underline-offset-4 transition hover:text-amberline hover:underline" href={`tel:${phoneDialValue(phone)}`}>
+          {phone}{index < phones.length - 1 ? ',' : ''}
+        </a>
+      ))}
+    </span>
   )
 }
 
@@ -195,5 +207,18 @@ function getHotelHeroImages(hotel) {
   const uploaded = Array.isArray(hotel?.branding?.heroImages)
     ? hotel.branding.heroImages.map((item) => (typeof item === 'string' ? item : item?.url || item?.secureUrl)).filter(Boolean)
     : []
-  return [...uploaded, hotel?.hero_image_url].filter(Boolean)
+  const mainImage = mediaUrl(hotel?.branding?.mainImage) || hotel?.branding?.mainImageUrl
+  return [mainImage, ...uploaded, hotel?.hero_image_url].filter(Boolean)
+}
+
+function mediaUrl(value) {
+  return typeof value === 'string' ? value : value?.url || value?.secureUrl || ''
+}
+
+function phoneDialValue(value) {
+  const raw = String(value || '').trim()
+  const hasPlus = raw.startsWith('+')
+  const digits = raw.replace(/\D/g, '')
+  if (!digits) return raw
+  return hasPlus ? `+${digits}` : digits
 }

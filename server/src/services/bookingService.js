@@ -6,6 +6,7 @@ import { assertValidStay, searchAvailability, toDateOnly } from './availabilityS
 import { createRazorpayOrder, verifyPaymentSignature } from './paymentService.js'
 import { generateBookingPdf } from './pdfService.js'
 import { sendBookingConfirmation } from './emailService.js'
+import { ensureOfferKindColumn } from './hotelService.js'
 
 const bookingRef = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 10)
 const LOYALTY_POINT_VALUE = 100
@@ -104,6 +105,7 @@ function normalizeGstClaim(input = {}) {
 
 async function findApplicableOffer(db, hotelId, userId, offerId, roomTypeId) {
   if (!offerId) return null
+  await ensureOfferKindColumn(db)
   const { rows } = await db.query(
     `WITH user_metrics AS (
        SELECT count(*) FILTER (WHERE status IN ('confirmed', 'completed'))::int AS qualified_bookings
@@ -115,6 +117,7 @@ async function findApplicableOffer(db, hotelId, userId, offerId, roomTypeId) {
      CROSS JOIN user_metrics um
      WHERE o.id = $3
        AND o.hotel_id = $1
+       AND o.offer_kind = 'applied'
        AND o.active = true
        AND now() BETWEEN o.starts_at AND o.ends_at
        AND (cardinality(coalesce(o.room_type_ids, '{}'::uuid[])) = 0 OR $4::uuid = ANY(o.room_type_ids))

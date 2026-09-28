@@ -80,6 +80,7 @@ const emptyRoom = {
   image2: '',
   image3: '',
   showOnHomepage: false,
+  sortOrder: 1000,
   active: true,
   inventoryDays: 180,
 }
@@ -88,6 +89,7 @@ const emptyAmenity = { id: '', name: '', description: '', price: 0, icon: '', ac
 const emptyFaq = { id: '', question: '', answer: '', sortOrder: 0, active: true }
 const emptyOffer = {
   id: '',
+  offerKind: 'applied',
   title: '',
   description: '',
   code: '',
@@ -178,7 +180,7 @@ export function AdminDashboard() {
   const [rateDayEditor, setRateDayEditor] = useState(null)
   const [entryDetails, setEntryDetails] = useState(null)
   const [activeUser, setActiveUser] = useState(null)
-  const [filters, setFilters] = useState({ rooms: '', bookings: '', bookingStatus: 'all', cancellations: '', cancellationStatus: 'requested', users: '', feedback: '', amenities: '', faqs: '', offers: '', offerAudience: 'all' })
+  const [filters, setFilters] = useState({ rooms: '', bookings: '', bookingStatus: 'all', cancellations: '', cancellationStatus: 'requested', users: '', feedback: '', amenities: '', faqs: '', offers: '', offerAudience: 'all', offerKind: 'all' })
   const [settingsForm, setSettingsForm] = useState({ loyaltyRedemptionMinPoints: DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS })
 
   const dashboard = useAsync(() => apiFetch('/admin/dashboard'), refreshKeys.dashboard)
@@ -240,6 +242,7 @@ export function AdminDashboard() {
       image2: gallery[1]?.url || '',
       image3: gallery[2]?.url || '',
       showOnHomepage: Boolean(room.show_on_homepage),
+      sortOrder: room.sort_order ?? 1000,
       active: Boolean(room.active ?? true),
       inventoryDays: room.inventory_days || 180,
     })
@@ -276,6 +279,7 @@ export function AdminDashboard() {
         heroImageUrl: images[0] || '',
         gallery: images.map((url, index) => ({ url, alt: `${roomForm.name} image ${index + 1}` })),
         showOnHomepage: Boolean(roomForm.showOnHomepage),
+        sortOrder: Number(roomForm.sortOrder || 1000),
         active: Boolean(roomForm.active),
         physicalRooms: Math.max(...Object.values(rateOptions).map((option) => Number(option.physicalRooms || 1))),
         inventoryDays: Number(roomForm.inventoryDays),
@@ -656,11 +660,13 @@ export function AdminDashboard() {
     try {
       const body = {
         ...offerForm,
-        discountValue: Number(offerForm.discountValue || 0),
-        minCompletedBookings: offerForm.audienceType === 'repeat_guest' ? Number(offerForm.minCompletedBookings || 1) : 0,
-        roomTypeIds: Array.isArray(offerForm.roomTypeIds) ? offerForm.roomTypeIds.filter(Boolean) : [],
-        imageUrl: offerForm.imageUrl || '',
-        code: offerForm.code || undefined,
+        offerKind: offerForm.offerKind || 'applied',
+        discountValue: offerForm.offerKind === 'showcase' ? 0 : Number(offerForm.discountValue || 0),
+        minCompletedBookings: offerForm.offerKind === 'applied' && offerForm.audienceType === 'repeat_guest' ? Number(offerForm.minCompletedBookings || 1) : 0,
+        roomTypeIds: offerForm.offerKind === 'showcase' ? [] : Array.isArray(offerForm.roomTypeIds) ? offerForm.roomTypeIds.filter(Boolean) : [],
+        imageUrl: offerForm.offerKind === 'showcase' ? '' : offerForm.imageUrl || '',
+        code: offerForm.offerKind === 'showcase' ? undefined : offerForm.code || undefined,
+        audienceType: offerForm.offerKind === 'showcase' ? 'general' : offerForm.audienceType,
       }
       if (offerForm.id) await apiFetch(`/admin/offers/${offerForm.id}`, { method: 'PATCH', body })
       else await apiFetch('/admin/offers', { method: 'POST', body })
@@ -1196,6 +1202,17 @@ function RoomsPanel({ rooms, amenities, filters, setFilters, roomForm, setRoomFo
               <Field label="Room name with room type"><input className="input" value={roomForm.name} onChange={(event) => setRoomForm({ ...roomForm, name: event.target.value })} placeholder="Deluxe room, Executive suite" required /></Field>
               <Field label="Bed type"><input className="input" value={roomForm.bedType} onChange={(event) => setRoomForm({ ...roomForm, bedType: event.target.value })} /></Field>
             </div>
+            <Field label="Display order">
+              <input
+                className="input"
+                type="number"
+                min="0"
+                max="10000"
+                value={roomForm.sortOrder}
+                onChange={(event) => setRoomForm({ ...roomForm, sortOrder: event.target.value })}
+                placeholder="1 shows first, 2 second"
+              />
+            </Field>
             <Field label="Description"><textarea className="input min-h-28 py-3" value={roomForm.description} onChange={(event) => setRoomForm({ ...roomForm, description: event.target.value })} required /></Field>
             <div className="rounded-lg border border-mist bg-white p-3">
               <span className="label">Room category</span>
@@ -2180,9 +2197,12 @@ function FaqPanel({ faqs, form, setForm, showForm, setShowForm, filters, setFilt
 }
 
 function OffersPanel({ offers, rooms, form, setForm, showForm, setShowForm, filters, setFilters, saving, onSave, onDelete }) {
-  const filtered = filterByText(offers, filters.offers, ['title', 'description', 'code', 'badge', 'audience_type', 'discount_type', 'discount_value']).filter((offer) => filters.offerAudience === 'all' || offer.audience_type === filters.offerAudience)
+  const filtered = filterByText(offers, filters.offers, ['title', 'description', 'code', 'badge', 'audience_type', 'discount_type', 'discount_value', 'offer_kind'])
+    .filter((offer) => filters.offerAudience === 'all' || offer.audience_type === filters.offerAudience)
+    .filter((offer) => filters.offerKind === 'all' || (offer.offer_kind || 'applied') === filters.offerKind)
   const previewSubtotal = 10000
   const previewDiscount = offerPreviewDiscount({ discount_type: form.discountType, discount_value: form.discountValue }, previewSubtotal)
+  const isShowcaseOffer = form.offerKind === 'showcase'
   if (showForm) {
     return (
       <section className="grid gap-3 sm:gap-6">
@@ -2195,30 +2215,48 @@ function OffersPanel({ offers, rooms, form, setForm, showForm, setShowForm, filt
             }}>Back to offers</button>
           </div>
           <div className="mt-5 grid gap-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <button
+                type="button"
+                className={`rounded-lg border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-soft ${form.offerKind === 'applied' ? 'border-amberline bg-amber-50 ring-2 ring-amberline/15' : 'border-mist bg-white'}`}
+                onClick={() => setForm({ ...form, offerKind: 'applied' })}
+              >
+                <p className="flex items-center gap-2 text-base font-black text-charcoal"><BadgePercent size={18} className="text-amberline" /> Applied booking offer</p>
+                <p className="mt-2 text-sm font-semibold leading-6 text-stone-600">Discount offer guests can select during booking and checkout.</p>
+              </button>
+              <button
+                type="button"
+                className={`rounded-lg border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-soft ${form.offerKind === 'showcase' ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-200' : 'border-mist bg-white'}`}
+                onClick={() => setForm({ ...form, offerKind: 'showcase', code: '', discountValue: 0, audienceType: 'general', minCompletedBookings: 0, roomTypeIds: [], imageUrl: '' })}
+              >
+                <p className="flex items-center gap-2 text-base font-black text-charcoal"><Gift size={18} className="text-emerald-700" /> Showcase offer</p>
+                <p className="mt-2 text-sm font-semibold leading-6 text-stone-600">Marketing-only offer shown on the hotel page. It is not applied in checkout.</p>
+              </button>
+            </div>
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Offer title"><input className="input" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} required /></Field>
-              <Field label="Code"><input className="input" value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value.toUpperCase() })} /></Field>
+              {!isShowcaseOffer ? <Field label="Code"><input className="input" value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value.toUpperCase() })} /></Field> : null}
               <Field label="Badge"><input className="input" value={form.badge} onChange={(event) => setForm({ ...form, badge: event.target.value })} /></Field>
-              <Field label="Audience"><select className="input" value={form.audienceType} onChange={(event) => setForm({ ...form, audienceType: event.target.value })}><option value="general">General offer</option><option value="repeat_guest">Personalized repeat guest</option></select></Field>
+              {!isShowcaseOffer ? <Field label="Audience"><select className="input" value={form.audienceType} onChange={(event) => setForm({ ...form, audienceType: event.target.value })}><option value="general">General offer</option><option value="repeat_guest">Personalized repeat guest</option></select></Field> : null}
             </div>
             <Field label="Description"><textarea className="input min-h-28 py-3" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} required /></Field>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <Field label="Discount type"><select className="input" value={form.discountType} onChange={(event) => setForm({ ...form, discountType: event.target.value })}><option value="percentage">Percentage</option><option value="fixed">Fixed amount</option></select></Field>
-              <Field label="Discount value"><input className="input" type="number" min="0" value={form.discountValue} onChange={(event) => setForm({ ...form, discountValue: event.target.value })} required /></Field>
+            <div className={`grid gap-4 md:grid-cols-2 ${isShowcaseOffer ? 'xl:grid-cols-4' : 'xl:grid-cols-4'}`}>
+              {!isShowcaseOffer ? <Field label="Discount type"><select className="input" value={form.discountType} onChange={(event) => setForm({ ...form, discountType: event.target.value })}><option value="percentage">Percentage</option><option value="fixed">Fixed amount</option></select></Field> : null}
+              {!isShowcaseOffer ? <Field label="Discount value"><input className="input" type="number" min="0" value={form.discountValue} onChange={(event) => setForm({ ...form, discountValue: event.target.value })} required /></Field> : null}
               <Field label="Starts"><input className="input" type="datetime-local" value={form.startsAt} onChange={(event) => setForm({ ...form, startsAt: event.target.value })} required /></Field>
               <Field label="Ends"><input className="input" type="datetime-local" value={form.endsAt} onChange={(event) => setForm({ ...form, endsAt: event.target.value })} required /></Field>
             </div>
             <div className="grid gap-4 md:grid-cols-3">
-              {form.audienceType === 'repeat_guest' ? <Field label="Minimum bookings"><input className="input" type="number" min="1" value={form.minCompletedBookings} onChange={(event) => setForm({ ...form, minCompletedBookings: event.target.value })} /></Field> : null}
+              {!isShowcaseOffer && form.audienceType === 'repeat_guest' ? <Field label="Minimum bookings"><input className="input" type="number" min="1" value={form.minCompletedBookings} onChange={(event) => setForm({ ...form, minCompletedBookings: event.target.value })} /></Field> : null}
               <Field label="Highlight color"><input className="input h-12" type="color" value={form.highlightColor} onChange={(event) => setForm({ ...form, highlightColor: event.target.value })} /></Field>
-              <Field label="Offer image URL"><input className="input" type="url" value={form.imageUrl} onChange={(event) => setForm({ ...form, imageUrl: event.target.value })} placeholder="https://..." /></Field>
+              {!isShowcaseOffer ? <Field label="Offer image URL"><input className="input" type="url" value={form.imageUrl} onChange={(event) => setForm({ ...form, imageUrl: event.target.value })} placeholder="https://..." /></Field> : null}
               <label className="mt-6 flex min-h-12 items-center gap-3 rounded-md border border-mist bg-white px-3 text-sm font-bold"><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /> Active</label>
             </div>
-            <OfferRoomTargetSelector rooms={rooms} value={form.roomTypeIds || []} onChange={(roomTypeIds) => setForm({ ...form, roomTypeIds })} />
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+            {!isShowcaseOffer ? <OfferRoomTargetSelector rooms={rooms} value={form.roomTypeIds || []} onChange={(roomTypeIds) => setForm({ ...form, roomTypeIds })} /> : null}
+            {!isShowcaseOffer ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
               <p className="font-extrabold text-amber-900">Calculation preview</p>
               <p className="mt-1 font-semibold leading-6 text-stone-600">On a Rs {previewSubtotal.toLocaleString('en-IN')} room subtotal, this offer saves Rs {previewDiscount.toLocaleString('en-IN')}. Tax is calculated after discount.</p>
-            </div>
+            </div> : null}
             <div className="flex flex-col gap-3 sm:flex-row">
               <button className="btn-primary flex-1" disabled={saving} type="submit">{saving ? 'Saving...' : 'Save offer'}</button>
               <button className="btn-secondary" type="button" onClick={() => {
@@ -2254,23 +2292,27 @@ function OffersPanel({ offers, rooms, form, setForm, showForm, setShowForm, filt
               <article key={offer.id} className="relative flex flex-col overflow-hidden rounded-md border border-white/70 bg-white/65 p-3 shadow-sm backdrop-blur sm:min-h-[230px] sm:p-4">
                 <div className="absolute inset-x-0 top-0 h-1" style={{ background: offer.highlight_color || '#f59e0b' }} />
                 <div className="flex items-start justify-between gap-3">
-                  <span className="rounded-md bg-amber-50 px-3 py-2 text-xs font-black uppercase text-amber-700">{offer.audience_type === 'repeat_guest' ? 'Personalized' : 'General'}</span>
+                  <div className="flex flex-wrap gap-2">
+                    <span className={`rounded-md px-3 py-2 text-xs font-black uppercase ${(offer.offer_kind || 'applied') === 'showcase' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{(offer.offer_kind || 'applied') === 'showcase' ? 'Showcase' : 'Applied'}</span>
+                    {(offer.offer_kind || 'applied') !== 'showcase' ? <span className="rounded-md bg-stone-100 px-3 py-2 text-xs font-black uppercase text-stone-600">{offer.audience_type === 'repeat_guest' ? 'Personalized' : 'General'}</span> : null}
+                  </div>
                   <StatusPill status={offer.active ? 'active' : 'inactive'} />
                 </div>
                 <h3 className="mt-4 text-lg font-extrabold">{offer.title}</h3>
                 <p className="mt-2 line-clamp-2 text-sm leading-6 text-stone-600">{offer.description}</p>
                 <div className="mt-4 grid gap-2 text-sm font-semibold text-stone-600 sm:grid-cols-2">
-                  <span>{offer.discount_type === 'percentage' ? `${Number(offer.discount_value)}% off` : `Rs ${Number(offer.discount_value).toLocaleString('en-IN')} off`}</span>
-                  <span>Saves Rs {offerPreviewDiscount(offer, 10000).toLocaleString('en-IN')} on Rs 10,000 before tax</span>
-                  {offer.code ? <span>Code: {offer.code}</span> : null}
-                  {offer.audience_type === 'repeat_guest' ? <span>Shows after {offer.min_completed_bookings} booking(s)</span> : null}
-                  <span>{offerRoomTargetLabel(offer, rooms)}</span>
+                  {(offer.offer_kind || 'applied') === 'showcase' ? <span>Shown on hotel offer showcase only</span> : <span>{offer.discount_type === 'percentage' ? `${Number(offer.discount_value)}% off` : `Rs ${Number(offer.discount_value).toLocaleString('en-IN')} off`}</span>}
+                  {(offer.offer_kind || 'applied') !== 'showcase' ? <span>Saves Rs {offerPreviewDiscount(offer, 10000).toLocaleString('en-IN')} on Rs 10,000 before tax</span> : null}
+                  {(offer.offer_kind || 'applied') !== 'showcase' && offer.code ? <span>Code: {offer.code}</span> : null}
+                  {(offer.offer_kind || 'applied') !== 'showcase' && offer.audience_type === 'repeat_guest' ? <span>Shows after {offer.min_completed_bookings} booking(s)</span> : null}
+                  {(offer.offer_kind || 'applied') !== 'showcase' ? <span>{offerRoomTargetLabel(offer, rooms)}</span> : null}
                   <span>{formatDate(offer.starts_at)} to {formatDate(offer.ends_at)}</span>
                 </div>
                 <div className="mt-auto flex gap-2 pt-4">
                   <button className="btn-secondary !min-h-10 !px-3" type="button" onClick={() => {
                     setForm({
                       id: offer.id,
+                      offerKind: offer.offer_kind || 'applied',
                       title: offer.title,
                       description: offer.description,
                       code: offer.code || '',
@@ -2359,6 +2401,7 @@ function RoomCard({ room, onEdit, onDelete, onToggleHomepage }) {
             <p className="mt-1 text-xs font-black uppercase tracking-[0.1em] text-stone-500">{room.bed_type || 'Room category'}</p>
           </div>
           <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <span className="rounded-md bg-bone px-2 py-1 text-xs font-black text-stone-600">Order {room.sort_order ?? 1000}</span>
             <StatusPill status={room.active ? 'active' : 'inactive'} />
             {room.show_on_homepage ? <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">Featured</span> : null}
           </div>
@@ -2768,8 +2811,13 @@ function CancellationFilters({ filters, setFilters }) {
 
 function OfferFilters({ filters, setFilters }) {
   return (
-    <div className="grid gap-2 sm:grid-cols-[220px_170px]">
+    <div className="grid gap-2 sm:grid-cols-[220px_160px_170px]">
       <SearchBox value={filters.offers} onChange={(value) => setFilters({ ...filters, offers: value })} placeholder="Search offers" />
+      <select className="input h-10" value={filters.offerKind} onChange={(event) => setFilters({ ...filters, offerKind: event.target.value })}>
+        <option value="all">All types</option>
+        <option value="applied">Applied</option>
+        <option value="showcase">Showcase</option>
+      </select>
       <select className="input h-10" value={filters.offerAudience} onChange={(event) => setFilters({ ...filters, offerAudience: event.target.value })}>
         <option value="all">All audiences</option>
         <option value="general">General</option>
