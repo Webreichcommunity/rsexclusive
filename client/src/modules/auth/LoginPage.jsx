@@ -7,8 +7,6 @@ import { useAsync } from '../../hooks/useAsync.js'
 import {
   loginWithEmail,
   loginWithGoogle,
-  readConsoleSession,
-  rememberConsoleSession,
   refreshFirebaseUser,
   registerWithEmail,
   resendEmailVerification,
@@ -35,10 +33,9 @@ export function LoginPage() {
   const isAdminLogin = appPath.startsWith('/admin/login') || params.get('role') === 'admin' || Boolean(consoleReturnTo)
   const requestedMode = params.get('mode')
   const initialMode = isAdminLogin ? (requestedMode === 'forgot' ? 'forgot' : 'login') : requestedMode === 'register' || bookingReturnTo ? 'register' : 'login'
-  const savedConsoleSession = isAdminLogin ? readConsoleSession() : null
   const [mode, setMode] = useState(initialMode)
   const [showEmailRegister, setShowEmailRegister] = useState(initialMode !== 'register')
-  const [form, setForm] = useState({ fullName: '', email: savedConsoleSession?.email || '', phone: '', password: '' })
+  const [form, setForm] = useState({ fullName: '', email: '', phone: '', password: '' })
   const [pendingProfile, setPendingProfile] = useState(null)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
@@ -53,6 +50,14 @@ export function LoginPage() {
   const hotel = tenantProfile.data?.hotel
 
   useEffect(() => () => window.clearTimeout(guideToastTimer.current), [])
+  useEffect(() => {
+    if (!isAdminLogin) return
+    try {
+      window.localStorage.removeItem('rs-exclusive-console-session')
+    } catch {
+      // Storage can be blocked by browser privacy settings.
+    }
+  }, [isAdminLogin])
 
   function showGuideToast(title, message, tone = 'warning') {
     window.clearTimeout(guideToastTimer.current)
@@ -78,12 +83,10 @@ export function LoginPage() {
   const redirectByRole = useCallback(async (authToken) => {
     const { user } = await apiFetch('/me', { authToken })
     if (user.role === 'super_admin') {
-      rememberConsoleSession(user, '/super-admin')
       navigate('/super-admin', { replace: true })
       return
     }
     if (user.role === 'hotel_admin') {
-      rememberConsoleSession(user, buildTenantPath('/admin', { isTenant: true, key: user.hotel?.subdomain || user.hotel?.slug, source: 'path' }))
       navigateToHotelPath(navigate, user.hotel, '/admin', { replace: true })
       return
     }
@@ -121,7 +124,7 @@ export function LoginPage() {
         return
       }
 
-      const credential = await loginWithEmail(form.email, form.password)
+      const credential = await loginWithEmail(form.email, form.password, { persistence: isAdminLogin ? 'session' : 'local' })
       if (!isAdminLogin && !credential.user.emailVerified) {
         const profile = readPendingProfile(credential.user.email) || { fullName: credential.user.displayName || '', email: credential.user.email, phone: '', photoUrl: credential.user.photoURL || '' }
         savePendingProfile(profile)
@@ -216,7 +219,7 @@ export function LoginPage() {
   }
 
   useEffect(() => {
-    if (authLoading || !isAuthenticated || !firebaseUser || mode === 'register' || mode === 'verify') return undefined
+    if (authLoading || isAdminLogin || !isAuthenticated || !firebaseUser || mode === 'register' || mode === 'verify') return undefined
     if (!isAdminLogin && !firebaseUser.emailVerified && firebaseUser.providerData.some((provider) => provider.providerId === 'password')) {
       const profile = readPendingProfile(firebaseUser.email) || { fullName: firebaseUser.displayName || '', email: firebaseUser.email, phone: '', photoUrl: firebaseUser.photoURL || '' }
       savePendingProfile(profile)

@@ -1,9 +1,8 @@
-import { lazy, Suspense, useEffect } from 'react'
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from './components/layout/AppShell.jsx'
 import { LoadingState } from './components/ui/LoadingState.jsx'
 import { useAuth } from './modules/auth/authContext.js'
-import { rememberConsoleSession } from './modules/auth/firebaseClient.js'
 import { useAppUser } from './modules/auth/useAppUser.js'
 import { useTenantMode } from './modules/tenant/useTenantMode.js'
 import { buildTenantPath, stripTenantFromPath } from './modules/tenant/resolveTenant.js'
@@ -68,10 +67,6 @@ function RequireConsoleAuth({ children, mode }) {
   const isSuperAdminRoute = appPath.startsWith('/super-admin')
   const hotelAdminPath = user?.hotel ? buildTenantPath('/admin', { isTenant: true, key: user.hotel.subdomain || user.hotel.slug, source: 'path' }) : buildTenantPath('/admin', mode)
   const targetPath = user?.role === 'super_admin' ? '/super-admin' : hotelAdminPath
-
-  useEffect(() => {
-    if (isStaff) rememberConsoleSession(user, targetPath)
-  }, [isStaff, targetPath, user])
 
   if (loading) return <LoadingState label="Checking secure access" />
   if (!isAuthenticated) {

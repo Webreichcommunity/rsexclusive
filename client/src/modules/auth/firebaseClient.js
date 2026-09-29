@@ -6,7 +6,6 @@ const firebaseConfig = {
 }
 
 const configured = Boolean(firebaseConfig.apiKey && firebaseConfig.authDomain && firebaseConfig.projectId)
-const consoleSessionKey = 'rs-exclusive-console-session'
 let currentUser = null
 let appInstance = null
 let authInstance = null
@@ -48,49 +47,17 @@ export async function observeAuth(callback) {
   })
 }
 
-export async function loginWithEmail(email, password) {
+export async function loginWithEmail(email, password, options = {}) {
   const auth = await loadFirebase()
   if (!auth) throw new Error('Firebase web config is not set')
-  const { signInWithEmailAndPassword } = await import('firebase/auth')
+  const { browserLocalPersistence, browserSessionPersistence, setPersistence, signInWithEmailAndPassword } = await import('firebase/auth')
   try {
+    await setPersistence(auth, options.persistence === 'session' ? browserSessionPersistence : browserLocalPersistence)
     const credential = await signInWithEmailAndPassword(auth, email, password)
     currentUser = credential.user
     return credential
   } catch (error) {
     throw new Error(toFirebaseLoginMessage(error))
-  }
-}
-
-export function rememberConsoleSession(user, path = '') {
-  if (!user?.role || !['hotel_admin', 'super_admin'].includes(user.role)) return
-  try {
-    window.localStorage.setItem(consoleSessionKey, JSON.stringify({
-      role: user.role,
-      email: user.email || '',
-      hotel: user.hotel || null,
-      path: path || (user.role === 'super_admin' ? '/super-admin' : '/admin'),
-      savedAt: Date.now(),
-    }))
-  } catch {
-    // Local storage can be blocked in private browser modes.
-  }
-}
-
-export function readConsoleSession() {
-  try {
-    const session = JSON.parse(window.localStorage.getItem(consoleSessionKey) || 'null')
-    if (!session?.role || !['hotel_admin', 'super_admin'].includes(session.role)) return null
-    return session
-  } catch {
-    return null
-  }
-}
-
-export function clearConsoleSession() {
-  try {
-    window.localStorage.removeItem(consoleSessionKey)
-  } catch {
-    // Local storage can be blocked in private browser modes.
   }
 }
 
@@ -166,7 +133,6 @@ export async function logout() {
   const { signOut } = await import('firebase/auth')
   if (auth) await signOut(auth)
   currentUser = null
-  clearConsoleSession()
 }
 
 async function waitForAuthReady(auth) {
