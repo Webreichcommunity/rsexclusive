@@ -10,8 +10,11 @@ function extractTenantKey(req) {
   if (!host || host === 'localhost' || host === '127.0.0.1') return null
 
   const primary = env.primaryDomain.toLowerCase()
-  if (host === primary || host === `www.${primary}` || host.startsWith('admin.')) return null
-  if (host.endsWith(`.${primary}`)) return host.replace(`.${primary}`, '')
+  const primaryAliases = new Set([primary, primary.startsWith('www.') ? primary.slice(4) : `www.${primary}`])
+  if (primaryAliases.has(host) || host.startsWith('admin.')) return null
+  for (const domain of primaryAliases) {
+    if (host.endsWith(`.${domain}`)) return host.replace(`.${domain}`, '')
+  }
 
   return host
 }

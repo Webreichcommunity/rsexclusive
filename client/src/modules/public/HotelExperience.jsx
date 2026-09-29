@@ -32,6 +32,54 @@ const fallbackHotelImage = 'https://images.unsplash.com/photo-1566073771259-6a85
 const fallbackRoomImage = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1400&q=80'
 const diningImage = 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=crop&w=1400&q=80'
 const loungeImage = 'https://images.unsplash.com/photo-1514890547357-a9ee288728e0?auto=format&fit=crop&w=1400&q=80'
+const primarySiteUrl = 'https://www.ranjeetgroupofhotels.in'
+const hotelSeoProfiles = {
+  rsexclusive: {
+    slug: 'rsexclusive',
+    name: 'RS Exclusive Stay and Fine Dine',
+    title: 'RS Exclusive Stay and Fine Dine | RS Hotel Akola Rooms',
+    description: 'Book RS Exclusive Stay and Fine Dine in Akola at Railway Station Road near Shah Hospital. View RS Hotel Akola rooms, offers, dining, and direct booking.',
+    keywords: 'rs exclusive stay and fine dine, rs exclusive stay and dine fine, rs hotel akola, rs hotels akola, rs hotel akola rooms, rs exclusive rooms, best hotel in akola, best rooms in akola, hotel near railway station akola, hotel near shah hospital akola, fine dine hotel akola, direct hotel booking akola',
+    address: {
+      streetAddress: 'Railway Station Rd, near Shah Hospital, Ramdaspeth',
+      addressLocality: 'Akola',
+      addressRegion: 'Maharashtra',
+      postalCode: '444005',
+      addressCountry: 'IN',
+    },
+    telephone: '+917447439463',
+  },
+  rgexclusive: {
+    slug: 'rgexclusive',
+    name: 'RG Exclusive Stay and Fine Dine',
+    title: 'RG Exclusive Stay and Fine Dine | RG Hotel Akola Rooms',
+    description: 'Book RG Exclusive Stay and Fine Dine in Akola at Murtizapur Road near Ram Lata Business Center. View RG Hotel Akola rooms, offers, dining, and direct booking.',
+    keywords: 'rg exclusive stay and fine dine, rg exclusive stay and dine fine, rg hotel akola, rg hotels akola, rg hotel akola rooms, rg exclusive rooms, best hotel in akola, best rooms in akola, hotel near murtizapur road akola, hotel near ram lata business center akola, fine dine hotel akola, direct hotel booking akola',
+    address: {
+      streetAddress: 'Murtizapur Rd, near RAM LATA BUSINESS CENTER, Kirti Nagar',
+      addressLocality: 'Akola',
+      addressRegion: 'Maharashtra',
+      postalCode: '444001',
+      addressCountry: 'IN',
+    },
+    telephone: '+918432154380',
+  },
+  ranjeethotel: {
+    slug: 'ranjeethotel',
+    name: 'Ranjeet Hotel',
+    title: 'Ranjeet Hotel Akola | Hotel Rooms Near New Bus Stand',
+    description: 'Book Ranjeet Hotel Akola on Station Road behind New Bus Stand. View Ranjeet Hotel Akola rooms, offers, contact details, and direct booking.',
+    keywords: 'ranjeet hotel, ranjeet hotel akola, hotel ranjeet akola, ranjeet hotel akola rooms, best hotel in akola, best rooms in akola, hotel near new bus stand akola, hotel near station road akola, akola hotel booking, direct hotel booking akola',
+    address: {
+      streetAddress: 'Station Road, behind New Bus Stand',
+      addressLocality: 'Akola',
+      addressRegion: 'Maharashtra',
+      postalCode: '444001',
+      addressCountry: 'IN',
+    },
+    telephone: '+918275035359',
+  },
+}
 
 function defaultDates() {
   const start = new Date()
@@ -39,6 +87,90 @@ function defaultDates() {
   const end = new Date(start)
   end.setDate(end.getDate() + 1)
   return [start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)]
+}
+
+function buildHotelSeo(hotel = {}, image) {
+  const key = hotelSeoKey(hotel)
+  const profile = hotelSeoProfiles[key]
+  const slug = profile?.slug || hotel.slug || hotel.subdomain || key || ''
+  const canonical = slug ? `${primarySiteUrl}/${slug}` : primarySiteUrl
+  const name = profile?.name || cleanHotelName(hotel.name)
+  const title = profile?.title || `${name} | Best Hotel in Akola | Direct Booking`
+  const description = profile?.description || `${hotelSummary(hotel)} Book rooms directly at ${name}, Akola with live availability, offers, and secure payment.`
+  const keywords = profile?.keywords || `${name}, hotel in Akola, best hotel in Akola, Akola hotel rooms, direct hotel booking Akola`
+  const address = profile?.address || normalizeStructuredAddress(hotel.address)
+  const telephone = profile?.telephone || normalizePhone(hotel.contact?.phone)
+
+  return {
+    title,
+    description,
+    keywords,
+    canonical,
+    structuredData: {
+      '@context': 'https://schema.org',
+      '@type': 'Hotel',
+      '@id': `${canonical}#hotel`,
+      name,
+      alternateName: hotel.name && hotel.name !== name ? hotel.name : undefined,
+      description,
+      url: canonical,
+      image,
+      telephone,
+      priceRange: 'INR',
+      address: {
+        '@type': 'PostalAddress',
+        ...address,
+      },
+      areaServed: {
+        '@type': 'City',
+        name: 'Akola',
+      },
+      amenityFeature: [
+        { '@type': 'LocationFeatureSpecification', name: 'Direct room booking', value: true },
+        { '@type': 'LocationFeatureSpecification', name: 'Fine dining', value: true },
+        { '@type': 'LocationFeatureSpecification', name: '25% online payment option', value: true },
+      ],
+      potentialAction: {
+        '@type': 'ReserveAction',
+        target: `${canonical}/book`,
+        name: `Book rooms at ${name}`,
+      },
+    },
+  }
+}
+
+function hotelSeoKey(hotel = {}) {
+  const source = `${hotel.slug || ''} ${hotel.subdomain || ''} ${hotel.name || ''}`.toLowerCase()
+  if (/rg\s*exclusive|rgexclusive|r-g-exclusive/.test(source)) return 'rgexclusive'
+  if (/rs\s*exclusive|rsexclusive|r-s-exclusive/.test(source)) return 'rsexclusive'
+  if (/ranjeet/.test(source)) return 'ranjeethotel'
+  return String(hotel.slug || hotel.subdomain || '').toLowerCase()
+}
+
+function normalizeStructuredAddress(address = {}) {
+  if (typeof address === 'string') {
+    return {
+      streetAddress: address,
+      addressLocality: 'Akola',
+      addressRegion: 'Maharashtra',
+      addressCountry: 'IN',
+    }
+  }
+  return {
+    streetAddress: address.line1 || address.street || address.streetAddress || '',
+    addressLocality: address.city || address.addressLocality || 'Akola',
+    addressRegion: address.state || address.addressRegion || 'Maharashtra',
+    postalCode: address.postalCode || address.zip || '',
+    addressCountry: address.country || address.addressCountry || 'IN',
+  }
+}
+
+function normalizePhone(value) {
+  const digits = String(value || '').replace(/\D/g, '')
+  if (!digits) return undefined
+  if (digits.startsWith('91')) return `+${digits}`
+  if (digits.length === 10) return `+91${digits}`
+  return `+${digits}`
 }
 
 export function HotelExperience() {
@@ -68,22 +200,17 @@ export function HotelExperience() {
   const visibleGalleryImages = galleryImages.length
     ? galleryImages
     : [heroImage, featuredRoom?.hero_image_url || fallbackRoomImage, rooms[1]?.hero_image_url || loungeImage, showcaseImages[0] || diningMediaImage]
+  const seo = buildHotelSeo(hotel, heroImage)
 
   return (
     <main className="overflow-hidden bg-transparent">
       <Seo
-        title={`${hotel.name} | Premium Stays`}
-        description={hotel.description}
+        title={seo.title}
+        description={seo.description}
+        keywords={seo.keywords}
+        canonical={seo.canonical}
         image={heroImage}
-        structuredData={{
-          '@context': 'https://schema.org',
-          '@type': 'Hotel',
-          name: hotel.name,
-          description: hotel.description,
-          image: heroImage,
-          address: hotel.address,
-          telephone: hotel.contact?.phone,
-        }}
+        structuredData={seo.structuredData}
       />
 
       <section id="hotel" className="relative -mt-[72px] min-h-[100svh] overflow-hidden pt-[112px] sm:pt-[72px]">

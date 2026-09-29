@@ -1,4 +1,8 @@
 const primaryDomain = (import.meta.env.VITE_PRIMARY_DOMAIN || 'localhost').toLowerCase()
+const primaryDomainAliases = new Set([
+  primaryDomain,
+  primaryDomain.startsWith('www.') ? primaryDomain.slice(4) : `www.${primaryDomain}`,
+])
 const savedTenantKey = 'rs-exclusive-local-tenant'
 const localHostnames = new Set(['localhost', '127.0.0.1', '::1'])
 const reservedPathSegments = new Set([
@@ -101,9 +105,11 @@ export function resolveTenantFromLocation(location = window.location) {
     }
     return { isTenant: false, key: null, source: 'local' }
   }
-  if (host === primaryDomain || host === `www.${primaryDomain}`) return { isTenant: false, key: null, source: 'primary' }
+  if (primaryDomainAliases.has(host)) return { isTenant: false, key: null, source: 'primary' }
   if (host.startsWith('admin.')) return { isTenant: false, key: 'admin', source: 'admin-subdomain' }
-  if (host.endsWith(`.${primaryDomain}`)) return { isTenant: true, key: host.replace(`.${primaryDomain}`, ''), source: 'subdomain' }
+  for (const domain of primaryDomainAliases) {
+    if (host.endsWith(`.${domain}`)) return { isTenant: true, key: host.replace(`.${domain}`, ''), source: 'subdomain' }
+  }
   return { isTenant: true, key: host, source: 'custom-domain' }
 }
 

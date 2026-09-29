@@ -1,7 +1,68 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://www.domain.com/</loc></url>
-  <url><loc>https://hotelone.domain.com/</loc></url>
-  <url><loc>https://hoteltwo.domain.com/</loc></url>
-  <url><loc>https://hotelthree.domain.com/</loc></url>
+<urlset
+  xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+  xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+>
+  <url>
+    <loc>https://www.ranjeetgroupofhotels.in/</loc>
+    <lastmod>2026-09-29</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://www.ranjeetgroupofhotels.in/mainlogo.png</image:loc>
+      <image:title>Ranjeet Group of Hotels Akola</image:title>
+      <image:caption>Official website for RS Exclusive, RG Exclusive, and Ranjeet Hotel in Akola.</image:caption>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.ranjeetgroupofhotels.in/rsexclusive</loc>
+    <lastmod>2026-09-29</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.95</priority>
+    <image:image>
+      <image:loc>https://www.ranjeetgroupofhotels.in/mainlogo.png</image:loc>
+      <image:title>RS Exclusive Stay and Fine Dine Akola</image:title>
+      <image:caption>RS Hotel Akola rooms, dining, offers, and direct booking near Railway Station Road.</image:caption>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.ranjeetgroupofhotels.in/rgexclusive</loc>
+    <lastmod>2026-09-29</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.95</priority>
+    <image:image>
+      <image:loc>https://www.ranjeetgroupofhotels.in/mainlogo.png</image:loc>
+      <image:title>RG Exclusive Stay and Fine Dine Akola</image:title>
+      <image:caption>RG Hotel Akola rooms, dining, offers, and direct booking near Murtizapur Road.</image:caption>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.ranjeetgroupofhotels.in/ranjeethotel</loc>
+    <lastmod>2026-09-29</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.95</priority>
+    <image:image>
+      <image:loc>https://www.ranjeetgroupofhotels.in/mainlogo.png</image:loc>
+      <image:title>Ranjeet Hotel Akola</image:title>
+      <image:caption>Ranjeet Hotel Akola rooms, offers, and direct booking near New Bus Stand.</image:caption>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.ranjeetgroupofhotels.in/rsexclusive/rooms</loc>
+    <lastmod>2026-09-29</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.75</priority>
+  </url>
+  <url>
+    <loc>https://www.ranjeetgroupofhotels.in/rgexclusive/rooms</loc>
+    <lastmod>2026-09-29</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.75</priority>
+  </url>
+  <url>
+    <loc>https://www.ranjeetgroupofhotels.in/ranjeethotel/rooms</loc>
+    <lastmod>2026-09-29</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.75</priority>
+  </url>
 </urlset>

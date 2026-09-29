@@ -1,4 +1,4 @@
-# R.S. Exclusive Stay & Fine Dine
+# Ranjeet Group of Hotels Akola
 
 Production-oriented multi-tenant hotel booking SaaS in one codebase, one Express backend, and one PostgreSQL database.
 
@@ -25,7 +25,7 @@ Local tenant switching after creating a hotel uses the hotel subdomain:
 http://your-hotel-subdomain.localhost:5173/
 ```
 
-For production, set `VITE_PRIMARY_DOMAIN` and backend `PRIMARY_DOMAIN` to your real root domain, for example `example.com`. Hotel links will then open as `https://your-hotel-subdomain.example.com/`.
+For production, set `VITE_PRIMARY_DOMAIN` and backend `PRIMARY_DOMAIN` to `www.ranjeetgroupofhotels.in`. The public hotel pages are `https://www.ranjeetgroupofhotels.in/rsexclusive`, `https://www.ranjeetgroupofhotels.in/rgexclusive`, and `https://www.ranjeetgroupofhotels.in/ranjeethotel`.
 
 The backend requires `DATABASE_URL` for real database operations. Apply the schema and clean seed:
 

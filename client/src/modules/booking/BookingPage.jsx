@@ -1405,7 +1405,7 @@ function GstClaimCard({ value = {}, onChange }) {
 }
 
 const bookingMilestoneSegments = [
-  { from: 0, to: 5, title: 'Meal/drink' },
+  { from: 0, to: 5, title: 'Meal or drink' },
   { from: 5, to: 10, title: 'Rs 1,000 off' },
   { from: 10, to: 20, title: 'Rs 2,000 off' },
 ]
@@ -1439,20 +1439,23 @@ function MilestoneOfferControl({ rewards = {}, discount, selected, subtotalBefor
         </div>
         {selected && offer ? <span className="rounded-md bg-white px-3 py-2 text-sm font-black text-emerald-800">{discount ? `- Rs ${discount.toLocaleString('en-IN')}` : 'Meal/drink'}</span> : null}
       </div>
-      <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_1fr_2fr]">
+      <div className="mt-4 grid min-w-0 gap-2 sm:grid-cols-3">
         {bookingMilestoneSegments.map((segment) => {
           const segmentProgress = Math.max(0, Math.min(cappedCompleted, segment.to) - segment.from)
           const fill = Math.round((segmentProgress / (segment.to - segment.from)) * 100)
           const complete = completed >= segment.to
           return (
-            <div key={segment.to} className="rounded-md border border-amber-100 bg-white p-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-xs font-black text-charcoal">{segment.title}</span>
-                <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[0.65rem] font-black ${complete ? 'bg-emerald-50 text-emerald-700' : 'bg-bone text-stone-500'}`}>{segment.from}-{segment.to}</span>
+            <div key={segment.to} className="min-w-0 rounded-md border border-amber-100 bg-white p-3">
+              <div className="flex min-h-[58px] flex-col justify-between gap-2">
+                <span className={`w-fit rounded-md px-2 py-1 text-[0.68rem] font-black uppercase tracking-[0.08em] ${complete ? 'bg-emerald-50 text-emerald-700' : 'bg-bone text-stone-500'}`}>
+                  {segment.from} to {segment.to} rooms
+                </span>
+                <span className="break-words text-sm font-black leading-5 text-charcoal">{segment.title}</span>
               </div>
               <div className="mt-2 overflow-hidden rounded-full bg-bone shadow-inner">
                 <div className="h-1.5 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)] transition-all duration-500" style={{ width: `${fill}%` }} />
               </div>
+              <p className="mt-1 text-right text-[0.68rem] font-black text-stone-500">{fill}%</p>
             </div>
           )
         })}

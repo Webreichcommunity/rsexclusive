@@ -31,6 +31,27 @@ import { buildHotelUrl } from '../tenant/resolveTenant.js'
 
 const fallbackHotelImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1800&q=80'
 const groupFallbackHero = 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=2200&q=80'
+const primarySiteUrl = 'https://www.ranjeetgroupofhotels.in'
+const groupHotelSeoItems = [
+  {
+    name: 'RS Exclusive Stay and Fine Dine',
+    url: `${primarySiteUrl}/rsexclusive`,
+    address: 'Railway Station Rd, near Shah Hospital, Ramdaspeth, Akola, Maharashtra 444005',
+    telephone: '+917447439463',
+  },
+  {
+    name: 'RG Exclusive Stay and Fine Dine',
+    url: `${primarySiteUrl}/rgexclusive`,
+    address: 'Murtizapur Rd, near RAM LATA BUSINESS CENTER, Kirti Nagar, Akola, Maharashtra 444001',
+    telephone: '+918432154380',
+  },
+  {
+    name: 'Ranjeet Hotel',
+    url: `${primarySiteUrl}/ranjeethotel`,
+    address: 'Station Road, behind New Bus Stand, Akola, Maharashtra 444001',
+    telephone: '+918275035359',
+  },
+]
 
 export function GroupLanding() {
   const { data, loading, error } = useAsync(() => apiFetch('/hotels'))
@@ -54,8 +75,31 @@ export function GroupLanding() {
   return (
     <main className="overflow-hidden bg-white">
       <Seo
-        title="Ranjeet Groups of Hotels Akola"
-        description="Discover the Ranjeet Groups of Hotels Akola collection and enter each hotel's own booking website."
+        title="Ranjeet Group of Hotels Akola | RS, RG and Ranjeet Hotel"
+        description="Official website of Ranjeet Group of Hotels Akola. Book RS Exclusive Stay and Fine Dine, RG Exclusive Stay and Fine Dine, and Ranjeet Hotel rooms directly."
+        keywords="ranjeet group of hotels akola, rs hotel akola, rg hotel akola, ranjeet hotel akola, best hotel in akola, akola hotel rooms"
+        canonical={primarySiteUrl}
+        image={heroImage}
+        structuredData={{
+          '@context': 'https://schema.org',
+          '@type': 'Organization',
+          '@id': `${primarySiteUrl}#organization`,
+          name: 'Ranjeet Group of Hotels Akola',
+          url: primarySiteUrl,
+          logo: `${primarySiteUrl}/mainlogo.png`,
+          description: 'Official direct booking website for RS Exclusive Stay and Fine Dine, RG Exclusive Stay and Fine Dine, and Ranjeet Hotel in Akola.',
+          department: groupHotelSeoItems.map((hotel) => ({
+            '@type': 'Hotel',
+            name: hotel.name,
+            url: hotel.url,
+            telephone: hotel.telephone,
+            address: hotel.address,
+          })),
+          mainEntityOfPage: {
+            '@type': 'WebPage',
+            '@id': primarySiteUrl,
+          },
+        }}
       />
 
       <section id="top" className="relative min-h-[calc(100svh-72px)] overflow-hidden bg-charcoal">

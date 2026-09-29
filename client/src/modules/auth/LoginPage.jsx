@@ -7,6 +7,8 @@ import { useAsync } from '../../hooks/useAsync.js'
 import {
   loginWithEmail,
   loginWithGoogle,
+  readConsoleSession,
+  rememberConsoleSession,
   refreshFirebaseUser,
   registerWithEmail,
   resendEmailVerification,
@@ -33,9 +35,10 @@ export function LoginPage() {
   const isAdminLogin = appPath.startsWith('/admin/login') || params.get('role') === 'admin' || Boolean(consoleReturnTo)
   const requestedMode = params.get('mode')
   const initialMode = isAdminLogin ? (requestedMode === 'forgot' ? 'forgot' : 'login') : requestedMode === 'register' || bookingReturnTo ? 'register' : 'login'
+  const savedConsoleSession = isAdminLogin ? readConsoleSession() : null
   const [mode, setMode] = useState(initialMode)
   const [showEmailRegister, setShowEmailRegister] = useState(initialMode !== 'register')
-  const [form, setForm] = useState({ fullName: '', email: '', phone: '', password: '' })
+  const [form, setForm] = useState({ fullName: '', email: savedConsoleSession?.email || '', phone: '', password: '' })
   const [pendingProfile, setPendingProfile] = useState(null)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
@@ -75,10 +78,12 @@ export function LoginPage() {
   const redirectByRole = useCallback(async (authToken) => {
     const { user } = await apiFetch('/me', { authToken })
     if (user.role === 'super_admin') {
+      rememberConsoleSession(user, '/super-admin')
       navigate('/super-admin', { replace: true })
       return
     }
     if (user.role === 'hotel_admin') {
+      rememberConsoleSession(user, buildTenantPath('/admin', { isTenant: true, key: user.hotel?.slug || user.hotel?.subdomain, source: 'path' }))
       navigateToHotelPath(navigate, user.hotel, '/admin', { replace: true })
       return
     }
@@ -317,8 +322,8 @@ export function LoginPage() {
           {showCredentialFields ? (
             <>
               <div className={`${!isAdminLogin ? 'mt-5 border-t border-mist pt-5' : 'mt-5'} grid gap-4`}>
-                <Field label="Email"><input id="email" className="input" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} type="email" required /></Field>
-                {mode !== 'forgot' ? <Field label="Password"><input id="password" className="input" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} type="password" minLength={6} required /></Field> : null}
+                <Field label="Email"><input id="email" className="input" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} type="email" autoComplete={isAdminLogin ? 'username' : 'email'} required /></Field>
+                {mode !== 'forgot' ? <Field label="Password"><input id="password" className="input" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} minLength={6} required /></Field> : null}
               </div>
               <button className="btn-primary mt-6 w-full" type="submit" disabled={loading}>
                 {loading ? <Loader2 size={18} className="animate-spin" /> : mode === 'register' ? <UserPlus size={18} /> : mode === 'forgot' ? <Mail size={18} /> : <LogIn size={18} />}

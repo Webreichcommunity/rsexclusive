@@ -1,4 +1,11 @@
 User-agent: *
 Allow: /
+Disallow: /admin
+Disallow: /login
+Disallow: /account
+Disallow: /super-admin
+Disallow: /*/admin
+Disallow: /*/login
+Disallow: /*/account
 
-Sitemap: https://www.domain.com/sitemap.xml
+Sitemap: https://www.ranjeetgroupofhotels.in/sitemap.xml

@@ -1,15 +1,22 @@
 import { useEffect } from 'react'
 
-export function Seo({ title, description, image, canonical, structuredData }) {
+export function Seo({ title, description, image, canonical, keywords, structuredData }) {
   useEffect(() => {
     document.title = title
     setMeta('description', description)
+    setMeta('keywords', keywords)
     setMeta('og:title', title, 'property')
     setMeta('og:description', description, 'property')
+    setMeta('og:type', 'website', 'property')
+    if (canonical) setMeta('og:url', canonical, 'property')
     if (image) setMeta('og:image', image, 'property')
+    setMeta('twitter:card', image ? 'summary_large_image' : 'summary')
+    setMeta('twitter:title', title)
+    setMeta('twitter:description', description)
+    if (image) setMeta('twitter:image', image)
     if (canonical) setCanonical(canonical)
     setStructuredData(structuredData)
-  }, [title, description, image, canonical, structuredData])
+  }, [title, description, image, canonical, keywords, structuredData])
   return null
 }
 

@@ -1,8 +1,10 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from './components/layout/AppShell.jsx'
 import { LoadingState } from './components/ui/LoadingState.jsx'
 import { useAuth } from './modules/auth/authContext.js'
+import { rememberConsoleSession } from './modules/auth/firebaseClient.js'
+import { useAppUser } from './modules/auth/useAppUser.js'
 import { useTenantMode } from './modules/tenant/useTenantMode.js'
 import { buildTenantPath, stripTenantFromPath } from './modules/tenant/resolveTenant.js'
 
@@ -59,14 +61,35 @@ export default function App() {
 function RequireConsoleAuth({ children, mode }) {
   const location = useLocation()
   const { isAuthenticated, loading } = useAuth()
+  const appUser = useAppUser()
+  const appPath = stripTenantFromPath(location.pathname, mode)
+  const user = appUser.data?.user
+  const isStaff = user?.role === 'hotel_admin' || user?.role === 'super_admin'
+  const isSuperAdminRoute = appPath.startsWith('/super-admin')
+  const hotelAdminPath = user?.hotel ? buildTenantPath('/admin', { isTenant: true, key: user.hotel.slug || user.hotel.subdomain, source: 'path' }) : buildTenantPath('/admin', mode)
+  const targetPath = user?.role === 'super_admin' ? '/super-admin' : hotelAdminPath
+
+  useEffect(() => {
+    if (isStaff) rememberConsoleSession(user, targetPath)
+  }, [isStaff, targetPath, user])
+
   if (loading) return <LoadingState label="Checking secure access" />
   if (!isAuthenticated) {
     const returnTo = encodeURIComponent(`${location.pathname}${location.search}`)
-    const loginPath = stripTenantFromPath(location.pathname, mode).startsWith('/admin')
+    const loginPath = appPath.startsWith('/admin')
       ? buildTenantPath('/admin/login', mode)
       : '/admin/login'
     const separator = loginPath.includes('?') ? '&' : '?'
     return <Navigate to={`${loginPath}${separator}returnTo=${returnTo}`} replace />
   }
+  if (appUser.loading) return <LoadingState label="Restoring console session" />
+  if (appUser.error || !isStaff) {
+    const returnTo = encodeURIComponent(`${location.pathname}${location.search}`)
+    const loginPath = appPath.startsWith('/admin') ? buildTenantPath('/admin/login', mode) : '/admin/login'
+    const separator = loginPath.includes('?') ? '&' : '?'
+    return <Navigate to={`${loginPath}${separator}returnTo=${returnTo}`} replace />
+  }
+  if (isSuperAdminRoute && user.role !== 'super_admin') return <Navigate to={hotelAdminPath} replace />
+  if (!isSuperAdminRoute && user.role === 'hotel_admin' && targetPath !== location.pathname) return <Navigate to={targetPath} replace />
   return children
 }
