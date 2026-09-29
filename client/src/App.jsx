@@ -83,7 +83,20 @@ function RequireConsoleAuth({ children, mode }) {
     return <Navigate to={`${loginPath}${separator}returnTo=${returnTo}`} replace />
   }
   if (appUser.loading) return <LoadingState label="Restoring console session" />
-  if (appUser.error || !isStaff) {
+  if (appUser.error) {
+    return (
+      <main className="container-page grid min-h-[70vh] place-items-center py-12">
+        <div className="panel max-w-xl p-6 text-center">
+          <h1 className="text-2xl font-black text-charcoal">Could not restore admin session</h1>
+          <p className="mt-3 text-sm font-semibold leading-6 text-stone-600">
+            You are signed in, but the admin API could not verify your staff access. Check the frontend API URL and backend CORS/domain settings.
+          </p>
+          <p className="mt-4 rounded-md bg-red-50 p-3 text-sm font-semibold text-red-700">{appUser.error.message}</p>
+        </div>
+      </main>
+    )
+  }
+  if (!isStaff) {
     const returnTo = encodeURIComponent(`${location.pathname}${location.search}`)
     const loginPath = appPath.startsWith('/admin') ? buildTenantPath('/admin/login', mode) : '/admin/login'
     const separator = loginPath.includes('?') ? '&' : '?'

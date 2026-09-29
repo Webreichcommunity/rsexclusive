@@ -20,12 +20,19 @@ function isLocalDevelopmentOrigin(origin) {
 export function isPrimaryDomainOrigin(origin, primaryDomain = env.primaryDomain) {
   const primary = String(primaryDomain || '').toLowerCase()
   if (!primary || localHostnames.has(primary)) return false
+  const primaryAliases = new Set([
+    primary,
+    primary.startsWith('www.') ? primary.slice(4) : `www.${primary}`,
+  ])
 
   try {
     const url = new URL(origin)
     if (!['http:', 'https:'].includes(url.protocol)) return false
     const hostname = url.hostname.toLowerCase()
-    return hostname === primary || hostname === `www.${primary}` || hostname.endsWith(`.${primary}`)
+    for (const domain of primaryAliases) {
+      if (hostname === domain || hostname.endsWith(`.${domain}`)) return true
+    }
+    return false
   } catch {
     return false
   }

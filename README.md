@@ -27,6 +27,8 @@ http://your-hotel-subdomain.localhost:5173/
 
 For production, set `VITE_PRIMARY_DOMAIN` and backend `PRIMARY_DOMAIN` to `www.ranjeetgroupofhotels.in`. The public hotel pages are `https://www.ranjeetgroupofhotels.in/rsexclusive`, `https://www.ranjeetgroupofhotels.in/rgexclusive`, and `https://www.ranjeetgroupofhotels.in/ranjeethotel`.
 
+For Vercel, set `VITE_API_BASE_URL=https://rsexclusive.onrender.com/api`. For Render, set `CLIENT_ORIGINS=https://www.ranjeetgroupofhotels.in,https://ranjeetgroupofhotels.in` and add any temporary Vercel preview URL you use for testing.
+
 The backend requires `DATABASE_URL` for real database operations. Apply the schema and clean seed:
 
 ```bash

@@ -16,6 +16,11 @@ test('CORS allows configured primary-domain tenant subdomains', () => {
   assert.equal(isPrimaryDomainOrigin('https://www.example.com', 'example.com'), true)
 })
 
+test('CORS allows bare and www origins when primary domain includes www', () => {
+  assert.equal(isPrimaryDomainOrigin('https://www.ranjeetgroupofhotels.in', 'www.ranjeetgroupofhotels.in'), true)
+  assert.equal(isPrimaryDomainOrigin('https://ranjeetgroupofhotels.in', 'www.ranjeetgroupofhotels.in'), true)
+})
+
 test('CORS rejects lookalike primary-domain origins', () => {
   assert.equal(isPrimaryDomainOrigin('https://hotel-ranjeet.example.com.attacker.test', 'example.com'), false)
   assert.equal(isPrimaryDomainOrigin('https://badexample.com', 'example.com'), false)
