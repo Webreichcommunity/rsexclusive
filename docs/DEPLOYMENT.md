@@ -31,7 +31,7 @@ The seed is clean and does not create demo hotels. Bootstrap the first super adm
 - Build command: `npm run build`
 - Output directory: `dist`
 - Set only `VITE_*` public variables.
-- Set `VITE_API_BASE_URL=https://rsexclusive.onrender.com/api`.
+- Set `VITE_API_BASE_URL=/api`. Vercel rewrites `/api/*` to the Render backend, which avoids browser CORB/CORS problems during admin login.
 - Set `VITE_PRIMARY_DOMAIN=www.ranjeetgroupofhotels.in`.
 - Add the deployed Vercel/custom domains in Firebase Authentication > Settings > Authorized domains, otherwise Firebase sign-in can succeed locally but fail or loop after deployment.
 

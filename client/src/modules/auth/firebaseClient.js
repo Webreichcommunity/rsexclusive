@@ -6,6 +6,7 @@ const firebaseConfig = {
 }
 
 const configured = Boolean(firebaseConfig.apiKey && firebaseConfig.authDomain && firebaseConfig.projectId)
+const consoleSessionKey = 'rs-exclusive-console-session'
 let currentUser = null
 let appInstance = null
 let authInstance = null
@@ -58,6 +59,14 @@ export async function loginWithEmail(email, password, options = {}) {
     return credential
   } catch (error) {
     throw new Error(toFirebaseLoginMessage(error))
+  }
+}
+
+export function clearConsoleSessionState() {
+  try {
+    window.localStorage.removeItem(consoleSessionKey)
+  } catch {
+    // Browser privacy settings can block storage.
   }
 }
 
@@ -133,6 +142,7 @@ export async function logout() {
   const { signOut } = await import('firebase/auth')
   if (auth) await signOut(auth)
   currentUser = null
+  clearConsoleSessionState()
 }
 
 async function waitForAuthReady(auth) {

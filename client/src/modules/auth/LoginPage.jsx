@@ -124,7 +124,7 @@ export function LoginPage() {
         return
       }
 
-      const credential = await loginWithEmail(form.email, form.password, { persistence: isAdminLogin ? 'session' : 'local' })
+      const credential = await loginWithEmail(form.email, form.password)
       if (!isAdminLogin && !credential.user.emailVerified) {
         const profile = readPendingProfile(credential.user.email) || { fullName: credential.user.displayName || '', email: credential.user.email, phone: '', photoUrl: credential.user.photoURL || '' }
         savePendingProfile(profile)

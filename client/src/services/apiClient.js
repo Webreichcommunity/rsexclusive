@@ -7,7 +7,7 @@ const getCache = new Map()
 const inFlightGets = new Map()
 
 export function publicApiUrl(path) {
-  const base = new URL(API_BASE_URL)
+  const base = new URL(API_BASE_URL, window.location.origin)
   return new URL(path.startsWith('/') ? path : `/${path}`, `${base.origin}/`).toString()
 }
 
@@ -19,7 +19,10 @@ export function receiptDownloadUrl(booking) {
 
 function withTenant(url) {
   const tenant = resolveTenantFromLocation()
-  const parsed = new URL(`${API_BASE_URL}${url}`)
+  const base = new URL(API_BASE_URL, window.location.origin)
+  const basePath = base.pathname.replace(/\/$/, '')
+  const requestPath = `${basePath}${url.startsWith('/') ? url : `/${url}`}`
+  const parsed = new URL(requestPath, base.origin)
   if (tenant.key && tenant.isTenant) parsed.searchParams.set('hotel', tenant.key)
   return parsed.toString()
 }
@@ -49,10 +52,16 @@ export async function apiFetch(url, options = {}) {
     body: options.body && !(options.body instanceof FormData) ? JSON.stringify(options.body) : options.body,
   })
     .then(async (response) => {
-      const payload = await response.json().catch(() => ({}))
+      const contentType = response.headers.get('content-type') || ''
+      const payload = contentType.includes('application/json')
+        ? await response.json().catch(() => ({}))
+        : { error: { message: await response.text().then((text) => text.slice(0, 180)).catch(() => '') } }
       if (!response.ok) {
-        const message = toCustomerMessage(payload?.error?.message, response.status)
+        const message = toCustomerMessage(payload?.error?.message, response.status, contentType)
         throw new Error(message)
+      }
+      if (!contentType.includes('application/json')) {
+        throw new Error('The API returned a non-JSON response. Check the Vercel API rewrite and VITE_API_BASE_URL setting.')
       }
       if (canCache) getCache.set(cacheKey, { data: payload, expiresAt: Date.now() + PUBLIC_GET_CACHE_MS })
       return payload
@@ -70,8 +79,9 @@ function isPublicCachedEndpoint(url) {
   return pathname.endsWith('/tenant') || pathname.endsWith('/hotels')
 }
 
-function toCustomerMessage(message, status) {
+function toCustomerMessage(message, status, contentType = '') {
   const raw = String(message || '').trim()
+  if (contentType && !contentType.includes('application/json')) return 'The API returned a website page instead of JSON. Check the Vercel /api rewrite and Render backend URL.'
   if (raw.includes('Firebase user is valid but not registered')) return 'Complete your account setup before continuing.'
   if (raw.includes('Invalid or expired Firebase ID token')) return 'Your session expired. Please sign in again.'
   if (raw.includes('Verify your email')) return 'Verify your email address before continuing.'

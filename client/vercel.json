@@ -1,6 +1,14 @@
 {
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://rsexclusive.onrender.com/api/:path*"
+    },
+    {
+      "source": "/receipts/:path*",
+      "destination": "https://rsexclusive.onrender.com/receipts/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

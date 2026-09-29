@@ -4,7 +4,7 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const productionApiFallback = 'https://rsexclusive.onrender.com/api'
+const productionApiFallback = '/api'
 
 function envValue(key, clientEnv, rootEnv) {
   return process.env[key] || clientEnv[key] || rootEnv[key] || ''
@@ -12,9 +12,7 @@ function envValue(key, clientEnv, rootEnv) {
 
 function clientApiBaseUrl(mode, clientEnv, rootEnv) {
   const value = envValue('VITE_API_BASE_URL', clientEnv, rootEnv)
-  if (mode === 'production' && (!value || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/api\/?$/i.test(value))) {
-    return productionApiFallback
-  }
+  if (mode === 'production') return value.startsWith('/') ? value : productionApiFallback
   return value || 'http://localhost:4000/api'
 }
 
