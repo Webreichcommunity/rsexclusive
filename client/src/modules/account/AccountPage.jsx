@@ -35,7 +35,6 @@ const profileOptions = [
   { avatar: 'avatar-female', gender: 'female', label: 'Female', Icon: CircleUserRound },
   { avatar: 'avatar-transgender', gender: 'transgender', label: 'Transgender', Icon: Accessibility },
 ]
-const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
 const cancellationReasons = [
   'Change in travel plan',
   'Booked wrong dates',
@@ -129,11 +128,12 @@ export function AccountPage() {
   if (appUser.data?.user?.role === 'hotel_admin') return <RedirectToHotelAdmin hotel={appUser.data.user.hotel} />
 
   const displayName = profileForm.fullName || firebaseUser?.displayName || firebaseUser?.email || 'Guest'
-  const points = Number(appUser.data?.user?.loyaltyPoints || 0)
-  const redemptionMinPoints = Math.max(0, Number(appUser.data?.user?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
-  const redemptionProgress = redemptionMinPoints > 0 ? Math.min(100, Math.round((points / redemptionMinPoints) * 100)) : 100
-  const pointsToUnlock = Math.max(0, redemptionMinPoints - points)
-  const redemptionUnlocked = points >= redemptionMinPoints
+  const milestoneRewards = appUser.data?.user?.milestoneRewards || {}
+  const completedRoomBookings = Number(milestoneRewards.completedRoomBookings || 0)
+  const bestOffer = milestoneRewards.bestEligibleOffer || null
+  const nextOffer = milestoneRewards.nextOffer || null
+  const roomsToNextOffer = Number(milestoneRewards.roomsToNextOffer || 0)
+  const redemptionHistory = Array.isArray(milestoneRewards.redemptionHistory) ? milestoneRewards.redemptionHistory : []
   const closeBookingDetails = () => {
     setSelectedBooking(null)
     if (requestedBookingReference) {
@@ -152,7 +152,7 @@ export function AccountPage() {
             <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-amber-100">Guest account</p>
             <h1 className="mt-4 max-w-4xl break-words text-5xl font-black leading-none md:text-7xl">Welcome, {firstName(displayName)}</h1>
             <p className="mt-5 max-w-2xl text-sm font-semibold leading-7 text-white/78">
-              Your booking history and loyalty points work across every hotel in the Ranjeet Groups collection.
+              Your booking history and milestone special offers work across every hotel in the Ranjeet Groups collection.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               <button className="btn-primary" type="button" onClick={() => setShowProfileModal(true)}><Settings size={18} /> Profile details</button>
@@ -168,7 +168,7 @@ export function AccountPage() {
               </div>
             </div>
             <div className="mt-5 grid grid-cols-2 gap-3">
-              <HeroStat icon={Gift} label="Group points" value={points.toLocaleString('en-IN')} />
+              <HeroStat icon={Gift} label="Milestone rooms" value={completedRoomBookings.toLocaleString('en-IN')} />
               <HeroStat icon={Hotel} label="Hotels visited" value={bookingStats.hotels} />
             </div>
           </FadeIn>
@@ -178,25 +178,12 @@ export function AccountPage() {
       <section className="container-page -mt-8 pb-16 md:pb-24">
         <div className="grid gap-4 sm:grid-cols-3">
           <MetricCard icon={CalendarDays} label="Bookings" value={bookingStats.bookings} text="Across all hotels" />
-          <MetricCard icon={Gift} label="Group points" value={points.toLocaleString('en-IN')} text={redemptionUnlocked ? 'Eligible to redeem at checkout' : `Unlocks at ${redemptionMinPoints.toLocaleString('en-IN')} points`} />
+          <MetricCard icon={Gift} label="Special offer" value={bestOffer ? bestOffer.title : `${completedRoomBookings}/${nextOffer?.milestone || 20}`} text={bestOffer ? 'Eligible to redeem on your next booking' : nextOffer ? `${roomsToNextOffer.toLocaleString('en-IN')} room booking${roomsToNextOffer === 1 ? '' : 's'} to unlock` : 'Milestones complete'} />
           <MetricCard icon={Sparkles} label="Paid value" value={rupees(bookingStats.paid)} text="Confirmed payment value" />
         </div>
 
-        <FadeIn viewport={false} className="mt-5 rounded-lg border border-white/70 bg-white/80 p-4 shadow-glass backdrop-blur-xl">
-          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-            <div>
-              <p className="eyebrow">Redemption eligibility</p>
-              <h2 className="mt-1 text-2xl font-black text-charcoal">{redemptionUnlocked ? 'Redeem points on your next booking' : 'Keep collecting group points'}</h2>
-            </div>
-            <span className="w-fit rounded-md bg-amber-50 px-3 py-2 text-sm font-black text-amber-900">{points.toLocaleString('en-IN')} / {redemptionMinPoints.toLocaleString('en-IN')} pts</span>
-          </div>
-          <div className="mt-4 overflow-hidden rounded-full bg-bone shadow-inner">
-            <div className="h-3 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)] transition-all duration-500" style={{ width: `${redemptionProgress}%` }} />
-          </div>
-          <p className="mt-3 text-sm font-semibold leading-6 text-stone-600">
-            {redemptionUnlocked ? 'The redeem option will appear automatically on checkout when your booking total can use points.' : `${pointsToUnlock.toLocaleString('en-IN')} more point${pointsToUnlock === 1 ? '' : 's'} needed before the redeem option appears during checkout.`}
-          </p>
-        </FadeIn>
+        <MilestoneJourneyCard rewards={milestoneRewards} />
+        <MilestoneRedemptionHistory history={redemptionHistory} />
 
         {error ? <p className="mt-6 rounded-md bg-red-50 p-3 text-red-700">{error.message}</p> : null}
         <section className="mt-8">
@@ -216,6 +203,7 @@ export function AccountPage() {
                     <p className="mt-1 truncate text-sm text-stone-500">{booking.room_type_name} / {booking.booking_reference}</p>
                     <p className="mt-2 text-xs font-bold uppercase tracking-[0.12em] text-stone-400">{booking.nights} night{Number(booking.nights) === 1 ? '' : 's'} / {booking.rooms_count} room{Number(booking.rooms_count) === 1 ? '' : 's'}</p>
                     <p className="mt-1 text-xs font-bold uppercase tracking-[0.1em] text-stone-400">Booked {formatDateTime(booking.confirmed_at || booking.created_at)}</p>
+                    <BookingOfferBadges booking={booking} />
                   </div>
                   <div className="grid gap-3 sm:grid-cols-[135px_110px_minmax(0,1fr)] sm:items-center">
                     <p className="text-sm font-semibold leading-6 text-stone-600">{formatDate(booking.check_in)}<br />{formatDate(booking.check_out)}</p>
@@ -440,7 +428,7 @@ function BookingDetailsModal({ booking, onCancellationRequested, onClose }) {
               <DetailLine label="Room subtotal" value={money(booking.currency, pricing.roomSubtotal || booking.subtotal_amount)} />
               {selectedAmenities.length ? <DetailLine label="Selected add-ons" value={money(booking.currency, pricing.amenitySubtotal || 0)} /> : null}
               {metadata.offer?.discountAmount ? <DetailLine label={`Offer: ${metadata.offer.title || 'Discount'}`} value={`-${money(booking.currency, metadata.offer.discountAmount)}`} /> : null}
-              {metadata.loyaltyRedemption?.amount ? <DetailLine label="Loyalty redemption" value={`-${money(booking.currency, metadata.loyaltyRedemption.amount)}`} /> : null}
+              {metadata.milestoneRedemption ? <DetailLine label={metadata.milestoneRedemption.title || 'Special offer'} value={Number(metadata.milestoneRedemption.discountAmount || 0) ? `-${money(booking.currency, metadata.milestoneRedemption.discountAmount)}` : 'Redeemed'} /> : null}
               <DetailLine label="Taxable subtotal" value={money(booking.currency, booking.subtotal_amount)} />
               <DetailLine label="CGST (2.5%)" value={money(booking.currency, taxHalf)} />
               <DetailLine label="IGST (2.5%)" value={money(booking.currency, taxHalf)} />
@@ -477,6 +465,119 @@ function BookingDetailsModal({ booking, onCancellationRequested, onClose }) {
         </div>
       </div>
     </div>
+  )
+}
+
+function BookingOfferBadges({ booking }) {
+  const metadata = booking?.metadata || {}
+  const offers = [
+    metadata.offer ? { label: metadata.offer.title || 'Booking offer', value: Number(metadata.offer.discountAmount || 0) ? `Saved ${money(booking.currency, metadata.offer.discountAmount)}` : 'Applied' } : null,
+    metadata.milestoneRedemption ? { label: metadata.milestoneRedemption.title || 'Milestone offer', value: Number(metadata.milestoneRedemption.discountAmount || 0) ? `Saved ${money(booking.currency, metadata.milestoneRedemption.discountAmount)}` : 'Redeemed' } : null,
+  ].filter(Boolean)
+  if (!offers.length) return null
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {offers.map((offer) => (
+        <span key={`${offer.label}-${offer.value}`} className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-black text-amber-900">
+          <Gift size={14} /> {offer.label} - {offer.value}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+const milestoneSegments = [
+  { from: 0, to: 5, title: 'Meal or drink', detail: 'Redeem on booking 6' },
+  { from: 5, to: 10, title: 'Rs 1,000 off', detail: 'Redeem on booking 11' },
+  { from: 10, to: 20, title: 'Rs 2,000 off', detail: 'Redeem on booking 21' },
+]
+
+function MilestoneJourneyCard({ rewards = {} }) {
+  const completed = Number(rewards.completedRoomBookings || 0)
+  const cappedCompleted = Math.min(Math.max(completed, 0), 20)
+  const offer = rewards.bestEligibleOffer || null
+  const nextOffer = rewards.nextOffer || null
+  const roomsToNextOffer = Number(rewards.roomsToNextOffer || 0)
+  const headline = offer ? `${offer.title} is ready` : nextOffer ? `Next unlock: ${nextOffer.title}` : 'Top milestone is ready'
+  const helper = offer
+    ? `Use it on your next paid booking. After payment confirmation, your room count resets to 0 and this redemption stays saved in history.`
+    : nextOffer
+      ? `${roomsToNextOffer.toLocaleString('en-IN')} more room booking${roomsToNextOffer === 1 ? '' : 's'} unlock ${nextOffer.title}. If you skip a ready offer, your count keeps increasing.`
+      : 'You can redeem the best available milestone on your next booking. Redeeming resets the journey to 0.'
+
+  return (
+    <FadeIn viewport={false} className="mt-5 rounded-lg border border-white/70 bg-white/85 p-4 shadow-glass backdrop-blur-xl">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+        <div>
+          <p className="eyebrow">Milestone journey</p>
+          <h2 className="mt-1 text-2xl font-black text-charcoal">{headline}</h2>
+        </div>
+        <span className="w-fit rounded-md bg-amber-50 px-3 py-2 text-sm font-black text-amber-900">{completed.toLocaleString('en-IN')} / 20 rooms</span>
+      </div>
+      <div className="mt-5 grid gap-2 sm:grid-cols-[1fr_1fr_2fr]">
+        {milestoneSegments.map((segment) => {
+          const segmentProgress = Math.max(0, Math.min(cappedCompleted, segment.to) - segment.from)
+          const fill = Math.round((segmentProgress / (segment.to - segment.from)) * 100)
+          const complete = completed >= segment.to
+          return (
+            <div key={segment.to} className="rounded-md border border-stone-200 bg-white p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.12em] text-stone-500">{segment.from}-{segment.to} rooms</p>
+                  <p className="mt-1 text-sm font-black text-charcoal">{segment.title}</p>
+                </div>
+                <span className={`rounded-md px-2 py-1 text-xs font-black ${complete ? 'bg-emerald-50 text-emerald-700' : 'bg-bone text-stone-600'}`}>{complete ? 'Ready' : `${fill}%`}</span>
+              </div>
+              <div className="mt-3 overflow-hidden rounded-full bg-bone shadow-inner">
+                <div className="h-2 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)] transition-all duration-500" style={{ width: `${fill}%` }} />
+              </div>
+              <p className="mt-2 text-xs font-semibold leading-5 text-stone-500">{segment.detail}</p>
+            </div>
+          )
+        })}
+      </div>
+      <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-stone-700">{helper}</p>
+      {rewards.lastRedeemedAt ? (
+        <p className="mt-3 text-xs font-bold uppercase tracking-[0.1em] text-stone-400">Last reset after redemption: {formatDateTime(rewards.lastRedeemedAt)}</p>
+      ) : null}
+    </FadeIn>
+  )
+}
+
+function MilestoneRedemptionHistory({ history = [] }) {
+  return (
+    <FadeIn viewport={false} className="mt-5 rounded-lg border border-white/70 bg-white/85 p-4 shadow-glass backdrop-blur-xl">
+      <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
+        <div>
+          <p className="eyebrow">Used special offers</p>
+          <h2 className="mt-1 text-2xl font-black text-charcoal">Redemption history</h2>
+        </div>
+        <span className="w-fit rounded-md bg-bone px-3 py-2 text-sm font-black text-stone-700">{history.length} saved</span>
+      </div>
+      {history.length ? (
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {history.map((item) => (
+            <article key={`${item.bookingId}-${item.code}`} className="rounded-md border border-mist bg-white p-3 shadow-soft">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-base font-black text-charcoal">{item.title}</p>
+                  <p className="mt-1 text-xs font-bold uppercase tracking-[0.1em] text-stone-400">{formatDateTime(item.redeemedAt)}</p>
+                </div>
+                <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-black text-emerald-700">{Number(item.discountAmount || 0) ? `Saved ${money(item.currency, item.discountAmount)}` : 'Redeemed'}</span>
+              </div>
+              <div className="mt-3 grid gap-2 text-sm">
+                <Line label="Booking" value={item.bookingReference} />
+                <Line label="Hotel" value={item.hotelName || '-'} />
+                <Line label="Booking number" value={`Milestone ${item.milestone || item.completedRoomBookings || '-'}`} />
+                <Line label="Rooms in booking" value={`${Number(item.roomsCount || 0).toLocaleString('en-IN')} room${Number(item.roomsCount || 0) === 1 ? '' : 's'}`} />
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-4 rounded-md bg-bone p-4 text-sm font-semibold leading-6 text-stone-600">No milestone offer has been used yet. When you redeem one, the exact offer, booking, hotel, date, and time will stay here.</p>
+      )}
+    </FadeIn>
   )
 }
 

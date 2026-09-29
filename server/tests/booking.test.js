@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { calculateBookingAmounts, calculateLoyaltyRedemption, calculateOfferDiscount, calculatePaymentPlan } from '../src/services/bookingService.js'
+import { calculateBookingAmounts, calculateMilestoneOfferDiscount, calculateOfferDiscount, calculatePaymentPlan } from '../src/services/bookingService.js'
 
 test('calculateBookingAmounts always applies the fixed 5 percent tax rate', () => {
   assert.deepEqual(calculateBookingAmounts(18000, 12), {
@@ -44,26 +44,14 @@ test('calculatePaymentPlan supports a 25 percent partial advance', () => {
   })
 })
 
-test('calculateLoyaltyRedemption values each point at Rs 100', () => {
-  assert.deepEqual(calculateLoyaltyRedemption(8, 20, 2500), {
-    points: 8,
-    amount: 800,
-    pointValue: 100,
-  })
+test('calculateMilestoneOfferDiscount applies fixed milestone discounts', () => {
+  assert.equal(calculateMilestoneOfferDiscount({ discountAmount: 1000 }, 5000), 1000)
 })
 
-test('calculateLoyaltyRedemption caps by balance and keeps a payable amount', () => {
-  assert.deepEqual(calculateLoyaltyRedemption(50, 30, 3000), {
-    points: 29,
-    amount: 2900,
-    pointValue: 100,
-  })
+test('calculateMilestoneOfferDiscount caps discounts while keeping a payable subtotal', () => {
+  assert.equal(calculateMilestoneOfferDiscount({ discountAmount: 2000 }, 1500), 1499)
 })
 
-test('calculateLoyaltyRedemption requires the configured minimum balance', () => {
-  assert.deepEqual(calculateLoyaltyRedemption(8, 900, 2500, 100, 1000), {
-    points: 0,
-    amount: 0,
-    pointValue: 100,
-  })
+test('calculateMilestoneOfferDiscount keeps complimentary meal offers as non-cash redemptions', () => {
+  assert.equal(calculateMilestoneOfferDiscount({ discountAmount: 0 }, 2500), 0)
 })

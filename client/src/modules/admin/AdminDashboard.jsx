@@ -55,7 +55,7 @@ const tabs = [
   { key: 'amenities', Icon: Sparkles, label: 'Amenities', text: 'Hotel add-ons' },
   { key: 'faqs', Icon: HelpCircle, label: 'FAQ', text: 'Guest questions' },
   { key: 'offers', Icon: Gift, label: 'Offers', text: 'Discount rules' },
-  { key: 'settings', Icon: Settings, label: 'Settings', text: 'Loyalty rules' },
+  { key: 'settings', Icon: Settings, label: 'Settings', text: 'Special offers' },
 ]
 
 const profileOptions = [
@@ -101,6 +101,7 @@ const emptyOffer = {
   active: true,
   audienceType: 'general',
   minCompletedBookings: 2,
+  redemptionLimitPerUser: 1,
   badge: 'Limited offer',
   highlightColor: '#f59e0b',
   imageUrl: '',
@@ -133,8 +134,6 @@ const emptyRateForm = {
   rateCategory: 'all',
   price: '',
 }
-
-const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
 
 export function AdminDashboard() {
   const [refreshKeys, setRefreshKeys] = useState({
@@ -181,7 +180,6 @@ export function AdminDashboard() {
   const [entryDetails, setEntryDetails] = useState(null)
   const [activeUser, setActiveUser] = useState(null)
   const [filters, setFilters] = useState({ rooms: '', bookings: '', bookingStatus: 'all', cancellations: '', cancellationStatus: 'requested', users: '', feedback: '', amenities: '', faqs: '', offers: '', offerAudience: 'all', offerKind: 'all' })
-  const [settingsForm, setSettingsForm] = useState({ loyaltyRedemptionMinPoints: DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS })
 
   const dashboard = useAsync(() => apiFetch('/admin/dashboard'), refreshKeys.dashboard)
   const rooms = useAsync(() => apiFetch('/admin/rooms'), refreshKeys.rooms)
@@ -663,6 +661,7 @@ export function AdminDashboard() {
         offerKind: offerForm.offerKind || 'applied',
         discountValue: offerForm.offerKind === 'showcase' ? 0 : Number(offerForm.discountValue || 0),
         minCompletedBookings: offerForm.offerKind === 'applied' && offerForm.audienceType === 'repeat_guest' ? Number(offerForm.minCompletedBookings || 1) : 0,
+        redemptionLimitPerUser: offerForm.offerKind === 'showcase' ? 0 : Number(offerForm.redemptionLimitPerUser ?? 1),
         roomTypeIds: offerForm.offerKind === 'showcase' ? [] : Array.isArray(offerForm.roomTypeIds) ? offerForm.roomTypeIds.filter(Boolean) : [],
         imageUrl: offerForm.offerKind === 'showcase' ? '' : offerForm.imageUrl || '',
         code: offerForm.offerKind === 'showcase' ? undefined : offerForm.code || undefined,
@@ -813,36 +812,15 @@ export function AdminDashboard() {
 
   const metrics = dashboard.data?.metrics || {}
   const hotel = dashboard.data?.hotel || {}
-  const loyaltyRedemptionMinPoints = Math.max(0, Number(hotel.policies?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
   const hotelName = hotel.branding?.logoText || hotel.name || 'Hotel workspace'
   const hotelLogo = hotel.branding?.logoUrl || ''
   const hotelLocation = [hotel.address?.city, hotel.address?.state].filter(Boolean).join(', ')
-
-  useEffect(() => {
-    setSettingsForm({ loyaltyRedemptionMinPoints })
-  }, [loyaltyRedemptionMinPoints])
 
   useEffect(() => {
     if (!firstRoomId) return
     setInventorySummaryRoomId((value) => value || firstRoomId)
     setRateSummaryRoomId((value) => value || firstRoomId)
   }, [firstRoomId])
-
-  async function saveSettings(event) {
-    event.preventDefault()
-    setSaving(true)
-    try {
-      await apiFetch('/admin/hotel-settings', {
-        method: 'PATCH',
-        body: { loyaltyRedemptionMinPoints: Number(settingsForm.loyaltyRedemptionMinPoints || 0) },
-      })
-      refresh('Loyalty redemption settings updated.', 'success', ['dashboard', 'settings'])
-    } catch (error) {
-      setNotice({ type: 'error', message: error.message })
-    } finally {
-      setSaving(false)
-    }
-  }
 
   if (dashboard.loading) return <LoadingState label="Loading hotel operations" />
 
@@ -1042,7 +1020,7 @@ export function AdminDashboard() {
             {activePage === 'amenities' ? <AmenitiesPanel amenities={amenityList} form={amenityForm} setForm={setAmenityForm} showForm={showAmenityForm} setShowForm={setShowAmenityForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveAmenity} onDelete={deleteAmenity} /> : null}
             {activePage === 'faqs' ? <FaqPanel faqs={faqList} form={faqForm} setForm={setFaqForm} showForm={showFaqForm} setShowForm={setShowFaqForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveFaq} onDelete={deleteFaq} /> : null}
             {activePage === 'offers' ? <OffersPanel offers={offerList} rooms={roomList} form={offerForm} setForm={setOfferForm} showForm={showOfferForm} setShowForm={setShowOfferForm} filters={filters} setFilters={setFilters} saving={saving} onSave={saveOffer} onDelete={deleteOffer} /> : null}
-            {activePage === 'settings' ? <SettingsPanel form={settingsForm} setForm={setSettingsForm} saving={saving} onSave={saveSettings} /> : null}
+            {activePage === 'settings' ? <SettingsPanel /> : null}
           </div>
         </section>
       </div>
@@ -1162,7 +1140,7 @@ function SummaryPanel({ dashboard, bookings, rooms, offers, users, feedback, ame
         <div className="grid grid-cols-2 gap-3 p-4 sm:gap-4 sm:p-5 md:grid-cols-3">
           <SummaryCard title="Rooms" value={`${activeRooms} active`} text={`${rooms.length} categories, ${featuredRooms} featured on homepage.`} />
           <SummaryCard title="Bookings" value={`${bookings.length} total`} text={`${metrics.completed_bookings || 0} completed and ${metrics.pending_bookings || 0} payment pending.`} />
-          <SummaryCard title="Guests" value={`${users.length} profiles`} text="Open user profiles to review booking history and loyalty points." />
+          <SummaryCard title="Guests" value={`${users.length} profiles`} text="Open user profiles to review booking history and milestone offers." />
           <SummaryCard title="Feedback" value={`${feedback.length} notes`} text="Guest messages are saved against this hotel only." />
           <SummaryCard title="Amenities" value={`${activeAmenities} active`} text="Use logo URLs to make amenities easier to scan." />
           <SummaryCard title="FAQ" value={`${activeFaqs} published`} text="Guest questions are shown on this hotel's FAQ page." />
@@ -1815,46 +1793,38 @@ function CreateBookingPanel({ rooms, manualBooking, setManualBooking, saving, on
   )
 }
 
-function SettingsPanel({ form, setForm, saving, onSave }) {
-  const threshold = Math.max(0, Number(form.loyaltyRedemptionMinPoints || 0))
-  const samplePoints = Math.max(0, threshold - 250)
-  const progress = threshold > 0 ? Math.min(100, Math.round((samplePoints / threshold) * 100)) : 100
+function SettingsPanel() {
+  const milestones = [
+    { milestone: 5, redeem: 6, title: 'Complimentary meal or drink', text: 'Guest can redeem one meal or drink on the next booking.' },
+    { milestone: 10, redeem: 11, title: 'Rs 1,000 off', text: 'Guest can apply Rs 1,000 off on the next booking.' },
+    { milestone: 20, redeem: 21, title: 'Rs 2,000 off', text: 'Guest can apply Rs 2,000 off on the next booking.' },
+  ]
   return (
     <section className="grid gap-3 sm:gap-6">
-      <form onSubmit={onSave} className="panel p-4 sm:p-5">
-        <PanelMiniTitle icon={Settings} title="Hotel loyalty settings" />
+      <div className="panel p-4 sm:p-5">
+        <PanelMiniTitle icon={Settings} title="Special offer milestones" />
         <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
           <div className="grid gap-4">
-            <Field label="Minimum points before redemption">
-              <input
-                className="input"
-                type="number"
-                min="0"
-                step="1"
-                value={form.loyaltyRedemptionMinPoints}
-                onChange={(event) => setForm({ ...form, loyaltyRedemptionMinPoints: event.target.value })}
-              />
-            </Field>
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-              <p className="text-sm font-extrabold text-amber-950">Guests can collect points immediately after confirmed bookings.</p>
-              <p className="mt-2 text-sm font-semibold leading-6 text-stone-700">Redemption will appear during checkout only after their group point balance reaches this minimum. Set 0 if redemption should be available for any positive balance.</p>
-            </div>
-            <button className="btn-primary w-full sm:w-fit" disabled={saving} type="submit">
-              <CheckCircle2 size={18} /> {saving ? 'Saving...' : 'Save loyalty rule'}
-            </button>
+            {milestones.map((item) => (
+              <div key={item.milestone} className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm font-extrabold text-amber-950">{item.milestone} room bookings, redeem on booking {item.redeem}</p>
+                <h3 className="mt-1 text-xl font-black text-charcoal">{item.title}</h3>
+                <p className="mt-2 text-sm font-semibold leading-6 text-stone-700">{item.text}</p>
+              </div>
+            ))}
           </div>
           <div className="rounded-lg border border-white/70 bg-white/70 p-4 shadow-glass backdrop-blur-xl">
             <p className="text-xs font-black uppercase tracking-[0.14em] text-stone-500">Guest account preview</p>
-            <p className="mt-2 text-2xl font-black text-charcoal">{samplePoints.toLocaleString('en-IN')} / {threshold.toLocaleString('en-IN')} pts</p>
+            <p className="mt-2 text-2xl font-black text-charcoal">Cross-hotel room credits</p>
             <div className="mt-4 overflow-hidden rounded-full bg-bone shadow-inner">
-              <div className="h-3 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)]" style={{ width: `${progress}%` }} />
+              <div className="h-3 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)]" style={{ width: '50%' }} />
             </div>
             <p className="mt-3 text-sm font-semibold leading-6 text-stone-600">
-              {threshold ? `${Math.max(0, threshold - samplePoints).toLocaleString('en-IN')} more points needed before checkout redemption opens.` : 'Any available points can be redeemed during checkout.'}
+              Confirmed room bookings from every hotel in the group are counted together. When a guest redeems any milestone offer and the payment is confirmed, their journey resets to zero.
             </p>
           </div>
         </div>
-      </form>
+      </div>
     </section>
   )
 }
@@ -1981,26 +1951,32 @@ function UsersPanel({ users, filters, setFilters, saving, onOpen, onDelete }) {
         <PanelHeader icon={UsersRound} title="User profiles" action={<SearchBox value={filters.users} onChange={(value) => setFilters({ ...filters, users: value })} placeholder="Search users" />} />
         {filtered.length ? (
           <div className="grid gap-3 p-3 sm:p-5 lg:gap-0 lg:divide-y lg:divide-white/60 lg:p-0">
-            {filtered.map((user) => (
-              <article key={user.id} className="grid gap-3 rounded-md border border-white/70 bg-white/65 p-3 shadow-sm backdrop-blur sm:p-4 lg:rounded-none lg:border-0 lg:bg-transparent lg:p-5 lg:shadow-none lg:grid-cols-[1fr_140px_160px_220px] lg:items-center">
-                <div className="flex min-w-0 gap-3">
-                  <Avatar id={user.profile?.avatar} gender={user.profile?.gender} photoUrl={user.profile?.photoUrl} />
-                  <div className="min-w-0">
-                    <p className="truncate text-base font-extrabold sm:text-lg">{user.full_name || 'Guest user'}</p>
-                    <p className="truncate text-sm font-semibold text-stone-500">{user.email}</p>
-                    <p className="mt-1 text-xs font-semibold text-stone-500">{user.phone || user.profile?.city || 'Profile details pending'}</p>
+            {filtered.map((user) => {
+              const rewards = user.milestone_rewards || {}
+              const offerLabel = rewards.bestEligibleOffer?.title || (rewards.nextOffer ? `${rewards.roomsToNextOffer || 0} to ${rewards.nextOffer.title}` : '-')
+              return (
+                <article key={user.id} className="grid gap-3 rounded-md border border-white/70 bg-white/65 p-3 shadow-sm backdrop-blur sm:p-4 lg:rounded-none lg:border-0 lg:bg-transparent lg:p-5 lg:shadow-none lg:grid-cols-[1fr_140px_160px_150px_190px_220px] lg:items-center">
+                  <div className="flex min-w-0 gap-3">
+                    <Avatar id={user.profile?.avatar} gender={user.profile?.gender} photoUrl={user.profile?.photoUrl} />
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-extrabold sm:text-lg">{user.full_name || 'Guest user'}</p>
+                      <p className="truncate text-sm font-semibold text-stone-500">{user.email}</p>
+                      <p className="mt-1 text-xs font-semibold text-stone-500">{user.phone || user.profile?.city || 'Profile details pending'}</p>
+                    </div>
                   </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2 lg:contents">
-                  <CompactStat label="Bookings" value={user.bookings || 0} />
-                  <CompactStat label="Revenue" value={`Rs ${Number(user.revenue || 0).toLocaleString('en-IN')}`} />
-                </div>
-                <div className="grid grid-cols-[1fr_auto] gap-2 lg:flex lg:flex-wrap">
-                  <button className="btn-secondary !min-h-10 !px-3 text-xs sm:text-sm" type="button" onClick={() => onOpen(user)}><UserRound size={16} /> Profile</button>
-                  <button className="btn-secondary !min-h-10 !px-3 text-red-700" type="button" disabled={saving} onClick={() => onDelete(user)} aria-label={`Delete ${user.full_name || user.email}`}><Trash2 size={16} /></button>
-                </div>
-              </article>
-            ))}
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:contents">
+                    <CompactStat label="Bookings" value={user.bookings || 0} />
+                    <CompactStat label="Revenue" value={`Rs ${Number(user.revenue || 0).toLocaleString('en-IN')}`} />
+                    <CompactStat label="Room credits" value={rewards.completedRoomBookings || 0} />
+                    <CompactStat label="Special offer" value={offerLabel} />
+                  </div>
+                  <div className="grid grid-cols-[1fr_auto] gap-2 lg:flex lg:flex-wrap">
+                    <button className="btn-secondary !min-h-10 !px-3 text-xs sm:text-sm" type="button" onClick={() => onOpen(user)}><UserRound size={16} /> Profile</button>
+                    <button className="btn-secondary !min-h-10 !px-3 text-red-700" type="button" disabled={saving} onClick={() => onDelete(user)} aria-label={`Delete ${user.full_name || user.email}`}><Trash2 size={16} /></button>
+                  </div>
+                </article>
+              )
+            })}
           </div>
         ) : <EmptyState title="No users found" text="Customers appear after signup or booking activity." />}
       </div>
@@ -2219,7 +2195,7 @@ function OffersPanel({ offers, rooms, form, setForm, showForm, setShowForm, filt
               <button
                 type="button"
                 className={`rounded-lg border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-soft ${form.offerKind === 'applied' ? 'border-amberline bg-amber-50 ring-2 ring-amberline/15' : 'border-mist bg-white'}`}
-                onClick={() => setForm({ ...form, offerKind: 'applied' })}
+                onClick={() => setForm({ ...form, offerKind: 'applied', redemptionLimitPerUser: Number(form.redemptionLimitPerUser || 0) || 1 })}
               >
                 <p className="flex items-center gap-2 text-base font-black text-charcoal"><BadgePercent size={18} className="text-amberline" /> Applied booking offer</p>
                 <p className="mt-2 text-sm font-semibold leading-6 text-stone-600">Discount offer guests can select during booking and checkout.</p>
@@ -2227,7 +2203,7 @@ function OffersPanel({ offers, rooms, form, setForm, showForm, setShowForm, filt
               <button
                 type="button"
                 className={`rounded-lg border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-soft ${form.offerKind === 'showcase' ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-200' : 'border-mist bg-white'}`}
-                onClick={() => setForm({ ...form, offerKind: 'showcase', code: '', discountValue: 0, audienceType: 'general', minCompletedBookings: 0, roomTypeIds: [], imageUrl: '' })}
+                onClick={() => setForm({ ...form, offerKind: 'showcase', code: '', discountValue: 0, audienceType: 'general', minCompletedBookings: 0, redemptionLimitPerUser: 0, roomTypeIds: [], imageUrl: '' })}
               >
                 <p className="flex items-center gap-2 text-base font-black text-charcoal"><Gift size={18} className="text-emerald-700" /> Showcase offer</p>
                 <p className="mt-2 text-sm font-semibold leading-6 text-stone-600">Marketing-only offer shown on the hotel page. It is not applied in checkout.</p>
@@ -2248,6 +2224,7 @@ function OffersPanel({ offers, rooms, form, setForm, showForm, setShowForm, filt
             </div>
             <div className="grid gap-4 md:grid-cols-3">
               {!isShowcaseOffer && form.audienceType === 'repeat_guest' ? <Field label="Minimum bookings"><input className="input" type="number" min="1" value={form.minCompletedBookings} onChange={(event) => setForm({ ...form, minCompletedBookings: event.target.value })} /></Field> : null}
+              {!isShowcaseOffer ? <Field label="Allowed bookings per user"><input className="input" type="number" min="0" step="1" value={form.redemptionLimitPerUser ?? 1} onChange={(event) => setForm({ ...form, redemptionLimitPerUser: event.target.value })} /></Field> : null}
               <Field label="Highlight color"><input className="input h-12" type="color" value={form.highlightColor} onChange={(event) => setForm({ ...form, highlightColor: event.target.value })} /></Field>
               {!isShowcaseOffer ? <Field label="Offer image URL"><input className="input" type="url" value={form.imageUrl} onChange={(event) => setForm({ ...form, imageUrl: event.target.value })} placeholder="https://..." /></Field> : null}
               <label className="mt-6 flex min-h-12 items-center gap-3 rounded-md border border-mist bg-white px-3 text-sm font-bold"><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /> Active</label>
@@ -2256,6 +2233,7 @@ function OffersPanel({ offers, rooms, form, setForm, showForm, setShowForm, filt
             {!isShowcaseOffer ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
               <p className="font-extrabold text-amber-900">Calculation preview</p>
               <p className="mt-1 font-semibold leading-6 text-stone-600">On a Rs {previewSubtotal.toLocaleString('en-IN')} room subtotal, this offer saves Rs {previewDiscount.toLocaleString('en-IN')}. Tax is calculated after discount.</p>
+              <p className="mt-1 font-semibold leading-6 text-stone-600">{Number(form.redemptionLimitPerUser || 0) ? `Each user can apply this offer on ${Number(form.redemptionLimitPerUser || 0).toLocaleString('en-IN')} booking${Number(form.redemptionLimitPerUser || 0) === 1 ? '' : 's'} only. After that, it will stop showing for that user.` : 'This offer can show on unlimited bookings for the same user.'}</p>
             </div> : null}
             <div className="flex flex-col gap-3 sm:flex-row">
               <button className="btn-primary flex-1" disabled={saving} type="submit">{saving ? 'Saving...' : 'Save offer'}</button>
@@ -2305,6 +2283,7 @@ function OffersPanel({ offers, rooms, form, setForm, showForm, setShowForm, filt
                   {(offer.offer_kind || 'applied') !== 'showcase' ? <span>Saves Rs {offerPreviewDiscount(offer, 10000).toLocaleString('en-IN')} on Rs 10,000 before tax</span> : null}
                   {(offer.offer_kind || 'applied') !== 'showcase' && offer.code ? <span>Code: {offer.code}</span> : null}
                   {(offer.offer_kind || 'applied') !== 'showcase' && offer.audience_type === 'repeat_guest' ? <span>Shows after {offer.min_completed_bookings} booking(s)</span> : null}
+                  {(offer.offer_kind || 'applied') !== 'showcase' ? <span>{Number(offer.redemption_limit_per_user || 0) ? `${Number(offer.redemption_limit_per_user || 0).toLocaleString('en-IN')} booking${Number(offer.redemption_limit_per_user || 0) === 1 ? '' : 's'} per user` : 'Unlimited bookings per user'}</span> : null}
                   {(offer.offer_kind || 'applied') !== 'showcase' ? <span>{offerRoomTargetLabel(offer, rooms)}</span> : null}
                   <span>{formatDate(offer.starts_at)} to {formatDate(offer.ends_at)}</span>
                 </div>
@@ -2323,6 +2302,7 @@ function OffersPanel({ offers, rooms, form, setForm, showForm, setShowForm, filt
                       active: offer.active,
                       audienceType: offer.audience_type,
                       minCompletedBookings: offer.min_completed_bookings,
+                      redemptionLimitPerUser: offer.redemption_limit_per_user ?? 1,
                       badge: offer.badge || '',
                       highlightColor: offer.highlight_color || '#f59e0b',
                       imageUrl: offer.image_url || '',
@@ -2672,7 +2652,7 @@ function BookingEditor({ form, setForm, saving, onSubmit, onDelete, onClose }) {
               <BookingInfoLine label="Room subtotal" value={money(pricing.roomSubtotal || form.subtotal_amount)} />
               {selectedAmenities.length ? <BookingInfoLine label="Selected add-ons" value={money(pricing.amenitySubtotal || 0)} /> : null}
               {metadata.offer?.discountAmount ? <BookingInfoLine label={`Offer: ${metadata.offer.title || 'Discount'}`} value={`-${money(metadata.offer.discountAmount)}`} /> : null}
-              {metadata.loyaltyRedemption?.amount ? <BookingInfoLine label="Loyalty redemption" value={`-${money(metadata.loyaltyRedemption.amount)}`} /> : null}
+              {metadata.milestoneRedemption ? <BookingInfoLine label={metadata.milestoneRedemption.title || 'Special offer'} value={Number(metadata.milestoneRedemption.discountAmount || 0) ? `-${money(metadata.milestoneRedemption.discountAmount)}` : 'Redeemed'} /> : null}
               <BookingInfoLine label="Taxable subtotal" value={money(form.subtotal_amount)} />
               <BookingInfoLine label="CGST (2.5%)" value={money(taxHalf)} />
               <BookingInfoLine label="IGST (2.5%)" value={money(taxHalf)} />
@@ -2712,6 +2692,7 @@ function BookingInfoLine({ label, value }) {
 
 function UserProfileModal({ profile, saving, onDelete, onClose }) {
   const user = profile.user
+  const rewards = user?.milestone_rewards || {}
   return (
     <Modal onClose={onClose} width="max-w-4xl">
       <div className="p-5">
@@ -2733,9 +2714,11 @@ function UserProfileModal({ profile, saving, onDelete, onClose }) {
             <div className="mt-6 grid gap-3 sm:grid-cols-4">
               <Stat label="Bookings" value={user?.bookings || 0} />
               <Stat label="Revenue" value={`Rs ${Number(user?.revenue || 0).toLocaleString('en-IN')}`} />
-              <Stat label="Loyalty points" value={user?.loyalty_points || 0} />
+              <Stat label="Room credits" value={rewards.completedRoomBookings || 0} />
               <Stat label="Last booking" value={user?.last_booking_at ? formatDate(user.last_booking_at) : '-'} />
             </div>
+            <AdminMilestoneJourney rewards={rewards} />
+            <AdminMilestoneHistory history={rewards.redemptionHistory || []} />
             <div className="mt-6 grid gap-3 rounded-md bg-bone p-4 text-sm sm:grid-cols-2">
               <Line label="Phone" value={user?.phone || '-'} />
               <Line label="Email" value={user?.email || '-'} />
@@ -2751,6 +2734,7 @@ function UserProfileModal({ profile, saving, onDelete, onClose }) {
                   <div>
                     <p className="font-bold">{booking.room_type_name}</p>
                     <p className="text-sm text-stone-500">{booking.booking_reference}</p>
+                    <AdminBookingOfferBadges booking={booking} />
                   </div>
                   <p className="text-sm font-semibold">{formatDate(booking.check_in)} to {formatDate(booking.check_out)}</p>
                   <StatusPill status={booking.status} />
@@ -2777,6 +2761,115 @@ function UserProfileModal({ profile, saving, onDelete, onClose }) {
         ) : null}
       </div>
     </Modal>
+  )
+}
+
+function AdminBookingOfferBadges({ booking }) {
+  const metadata = booking?.metadata || {}
+  const offers = [
+    metadata.offer ? { label: metadata.offer.title || 'Booking offer', value: Number(metadata.offer.discountAmount || 0) ? money(metadata.offer.discountAmount) : 'Applied' } : null,
+    metadata.milestoneRedemption ? { label: metadata.milestoneRedemption.title || 'Milestone offer', value: Number(metadata.milestoneRedemption.discountAmount || 0) ? money(metadata.milestoneRedemption.discountAmount) : 'Meal/drink' } : null,
+  ].filter(Boolean)
+  if (!offers.length) return null
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {offers.map((offer) => (
+        <span key={`${offer.label}-${offer.value}`} className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[0.68rem] font-black text-amber-900">
+          <Gift size={12} /> {offer.label} - {offer.value}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+const adminMilestoneSegments = [
+  { from: 0, to: 5, title: 'Meal or drink', detail: 'Redeem on booking 6' },
+  { from: 5, to: 10, title: 'Rs 1,000 off', detail: 'Redeem on booking 11' },
+  { from: 10, to: 20, title: 'Rs 2,000 off', detail: 'Redeem on booking 21' },
+]
+
+function AdminMilestoneJourney({ rewards = {} }) {
+  const completed = Number(rewards.completedRoomBookings || 0)
+  const cappedCompleted = Math.min(Math.max(completed, 0), 20)
+  const offer = rewards.bestEligibleOffer || null
+  const nextOffer = rewards.nextOffer || null
+  const roomsToNextOffer = Number(rewards.roomsToNextOffer || 0)
+  const headline = offer ? `${offer.title} is ready` : nextOffer ? `Next unlock: ${nextOffer.title}` : 'Top milestone is ready'
+
+  return (
+    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-4">
+      <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-amber-900">Special offer journey</p>
+          <p className="mt-1 text-lg font-black text-charcoal">{headline}</p>
+        </div>
+        <span className="w-fit rounded-md bg-white px-3 py-2 text-sm font-black text-amber-900">{completed.toLocaleString('en-IN')} / 20 rooms</span>
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_1fr_2fr]">
+        {adminMilestoneSegments.map((segment) => {
+          const segmentProgress = Math.max(0, Math.min(cappedCompleted, segment.to) - segment.from)
+          const fill = Math.round((segmentProgress / (segment.to - segment.from)) * 100)
+          const complete = completed >= segment.to
+          return (
+            <div key={segment.to} className="rounded-md border border-amber-100 bg-white p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-[0.68rem] font-black uppercase tracking-[0.1em] text-stone-500">{segment.from}-{segment.to}</p>
+                  <p className="mt-1 text-sm font-black text-charcoal">{segment.title}</p>
+                </div>
+                <span className={`rounded-md px-2 py-1 text-xs font-black ${complete ? 'bg-emerald-50 text-emerald-700' : 'bg-bone text-stone-600'}`}>{complete ? 'Ready' : `${fill}%`}</span>
+              </div>
+              <div className="mt-3 overflow-hidden rounded-full bg-bone shadow-inner">
+                <div className="h-2 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)]" style={{ width: `${fill}%` }} />
+              </div>
+              <p className="mt-2 text-xs font-semibold text-stone-500">{segment.detail}</p>
+            </div>
+          )
+        })}
+      </div>
+      <p className="mt-3 text-sm font-semibold leading-6 text-stone-700">
+        Counts confirmed room bookings across all hotels since this guest's last redeemed milestone. If the guest skips a ready offer, the count keeps increasing. A confirmed redemption resets the count to 0.
+      </p>
+      {nextOffer && !offer ? <p className="mt-2 text-sm font-black text-amber-900">{roomsToNextOffer.toLocaleString('en-IN')} more room booking{roomsToNextOffer === 1 ? '' : 's'} needed.</p> : null}
+      {rewards.lastRedeemedAt ? <p className="mt-2 text-xs font-bold uppercase tracking-[0.1em] text-stone-500">Last reset: {formatDateTime(rewards.lastRedeemedAt)}</p> : null}
+    </div>
+  )
+}
+
+function AdminMilestoneHistory({ history = [] }) {
+  return (
+    <div className="mt-3 rounded-md border border-mist bg-white p-4">
+      <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-stone-500">Used special offers</p>
+          <h3 className="mt-1 text-lg font-black text-charcoal">Milestone redemption history</h3>
+        </div>
+        <span className="w-fit rounded-md bg-bone px-3 py-2 text-sm font-black text-stone-700">{history.length} saved</span>
+      </div>
+      {history.length ? (
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          {history.map((item) => (
+            <div key={`${item.bookingId}-${item.code}`} className="rounded-md border border-mist bg-ivory p-3 text-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-black text-charcoal">{item.title}</p>
+                  <p className="mt-1 text-xs font-bold uppercase tracking-[0.1em] text-stone-500">{formatDateTime(item.redeemedAt)}</p>
+                </div>
+                <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-black text-emerald-700">{Number(item.discountAmount || 0) ? money(item.discountAmount) : 'Meal/drink'}</span>
+              </div>
+              <div className="mt-3 grid gap-2">
+                <Line label="Booking" value={item.bookingReference} />
+                <Line label="Hotel" value={item.hotelName || '-'} />
+                <Line label="Milestone" value={`${Number(item.milestone || 0).toLocaleString('en-IN')} rooms`} />
+                <Line label="Rooms booked" value={Number(item.roomsCount || 0).toLocaleString('en-IN')} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 rounded-md bg-bone p-3 text-sm font-semibold text-stone-600">No milestone offer has been redeemed by this guest yet.</p>
+      )}
+    </div>
   )
 }
 

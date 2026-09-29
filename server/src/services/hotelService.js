@@ -12,6 +12,11 @@ export async function ensureOfferKindColumn(db = { query }) {
           CHECK (offer_kind IN ('applied', 'showcase'))
     `)
     await db.query(`
+      ALTER TABLE offers
+        ADD COLUMN IF NOT EXISTS redemption_limit_per_user int NOT NULL DEFAULT 1
+          CHECK (redemption_limit_per_user >= 0)
+    `)
+    await db.query(`
       CREATE INDEX IF NOT EXISTS idx_offers_hotel_kind_active
         ON offers(hotel_id, offer_kind, active, starts_at, ends_at)
     `)
@@ -121,14 +126,30 @@ export async function listOffersForHotel(hotelId, userId = null, { activeOnly = 
        FROM bookings
        WHERE hotel_id = $1 AND user_id = $2
      )
-     SELECT o.*
+     SELECT o.*, coalesce(ou.used_count, 0)::int AS current_user_redemptions
      FROM offers o
      CROSS JOIN user_metrics um
+     LEFT JOIN LATERAL (
+       SELECT count(*)::int AS used_count
+       FROM bookings b
+       WHERE $2::uuid IS NOT NULL
+         AND b.user_id = $2
+         AND (
+           b.status IN ('confirmed', 'completed')
+           OR (b.status = 'payment_pending' AND b.hold_expires_at > now())
+         )
+         AND b.metadata->'offer'->>'id' = o.id::text
+     ) ou ON true
      WHERE o.hotel_id = $1
        AND ($3::boolean = false OR (o.active = true AND now() BETWEEN o.starts_at AND o.ends_at))
        AND (
          o.audience_type = 'general'
          OR ($2::uuid IS NOT NULL AND o.audience_type = 'repeat_guest' AND um.qualified_bookings >= o.min_completed_bookings)
+       )
+       AND (
+         $2::uuid IS NULL
+         OR coalesce(o.redemption_limit_per_user, 0) = 0
+         OR coalesce(ou.used_count, 0) < o.redemption_limit_per_user
        )
      ORDER BY CASE WHEN o.offer_kind = 'showcase' THEN 0 ELSE 1 END, o.audience_type DESC, o.created_at DESC`,
     [hotelId, userId, activeOnly],

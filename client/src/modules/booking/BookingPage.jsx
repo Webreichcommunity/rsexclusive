@@ -16,7 +16,6 @@ import { buildTenantPath, getSavedTenantKey, resolveTenantFromLocation } from '.
 
 const fallbackRoomImage = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1400&q=80'
 const PARTIAL_PAYMENT_PERCENT = 25
-const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
 const FIXED_TAX_RATE = 5
 const TERMS_VERSION = '2026-09-20'
 const bookingAuthDraftKey = 'rs-exclusive-booking-auth-return'
@@ -95,7 +94,7 @@ export function BookingPage() {
   const [selectedRoomId, setSelectedRoomId] = useState(params.get('roomTypeId') || '')
   const [selectedOfferId, setSelectedOfferId] = useState(params.get('offerId') || '')
   const [selectedAmenityIds, setSelectedAmenityIds] = useState(() => queryList(params, 'amenities'))
-  const [redeemPoints, setRedeemPoints] = useState(Math.max(0, Number(queryValue(params, 'redeemPoints', '0'))))
+  const [redeemMilestoneOffer, setRedeemMilestoneOffer] = useState(params.get('milestoneOffer') === '1')
   const [paymentMode, setPaymentMode] = useState(params.get('paymentMode') === 'partial' ? 'partial' : 'full')
   const [termsAccepted, setTermsAccepted] = useState(false)
   const [searched, setSearched] = useState(false)
@@ -113,9 +112,8 @@ export function BookingPage() {
   const allRooms = useMemo(() => data?.rooms || [], [data])
   const bookableAmenities = useMemo(() => data?.amenities || [], [data])
   const offers = useMemo(() => (data?.offers || []).filter(isAppliedOffer), [data])
-  const availableLoyaltyPoints = Number(data?.loyaltyPoints || 0)
-  const loyaltyRedemptionMinPoints = Math.max(0, Number(data?.hotel?.policies?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
-  const loyaltyRedeemEligible = availableLoyaltyPoints >= loyaltyRedemptionMinPoints
+  const milestoneRewards = data?.milestoneRewards || {}
+  const availableMilestoneOffer = milestoneRewards.bestEligibleOffer || null
   const selectedOffer = useMemo(
     () => offers.find((offer) => offer.id === selectedOfferId) || null,
     [offers, selectedOfferId],
@@ -158,15 +156,12 @@ export function BookingPage() {
   const grossSubtotal = roundMoney(roomSubtotal + amenitySubtotal)
   const offerDiscount = calculateOfferDiscount(selectedOfferForRoom, grossSubtotal)
   const subtotalBeforeRedemption = Math.max(0, roundMoney(grossSubtotal - offerDiscount))
-  const maxRedeemablePoints = loyaltyRedeemEligible ? Math.min(availableLoyaltyPoints, Math.floor(Math.max(0, subtotalBeforeRedemption - 1) / 100)) : 0
-  const appliedRedeemPoints = Math.min(Math.max(0, Number(redeemPoints || 0)), maxRedeemablePoints)
-  const loyaltyDiscount = roundMoney(appliedRedeemPoints * 100)
-  const subtotal = Math.max(0, roundMoney(subtotalBeforeRedemption - loyaltyDiscount))
+  const milestoneDiscount = redeemMilestoneOffer ? calculateMilestoneOfferDiscount(availableMilestoneOffer, subtotalBeforeRedemption) : 0
+  const subtotal = Math.max(0, roundMoney(subtotalBeforeRedemption - milestoneDiscount))
   const tax = roundMoney((subtotal * FIXED_TAX_RATE) / 100)
   const total = roundMoney(subtotal + tax)
   const paymentDue = paymentMode === 'partial' ? roundMoney(total * (PARTIAL_PAYMENT_PERCENT / 100)) : total
   const balanceDue = roundMoney(total - paymentDue)
-  const loyaltyPoints = Math.floor(total / 100)
 
   const syncUrl = useCallback((nextForm = form, roomTypeId = selectedRoomId, extra = {}) => {
     const next = new URLSearchParams()
@@ -184,13 +179,13 @@ export function BookingPage() {
     if (offerId) next.set('offerId', offerId)
     const amenityIds = extra.amenityIds ?? selectedAmenityIds
     if (amenityIds?.length) next.set('amenities', amenityIds.join(','))
-    const points = Math.max(0, Number(extra.redeemPoints ?? redeemPoints ?? 0))
-    if (points) next.set('redeemPoints', String(points))
+    const milestoneOffer = extra.redeemMilestoneOffer ?? redeemMilestoneOffer
+    if (milestoneOffer) next.set('milestoneOffer', '1')
     const mode = extra.paymentMode ?? paymentMode
     if (mode === 'partial') next.set('paymentMode', mode)
     setParams(next, { replace: true })
     return next
-  }, [form, params, paymentMode, redeemPoints, selectedAmenityIds, selectedOfferId, selectedRoomId, setParams])
+  }, [form, params, paymentMode, redeemMilestoneOffer, selectedAmenityIds, selectedOfferId, selectedRoomId, setParams])
 
   useEffect(() => {
     const profile = appUser.data?.user
@@ -234,7 +229,7 @@ export function BookingPage() {
     if (draft.selectedRoomId) setSelectedRoomId(draft.selectedRoomId)
     if (typeof draft.selectedOfferId === 'string') setSelectedOfferId(draft.selectedOfferId)
     if (Array.isArray(draft.selectedAmenityIds)) setSelectedAmenityIds(draft.selectedAmenityIds)
-    setRedeemPoints(Math.max(0, Number(draft.redeemPoints || 0)))
+    setRedeemMilestoneOffer(Boolean(draft.redeemMilestoneOffer))
     setPaymentMode(draft.paymentMode === 'partial' ? 'partial' : 'full')
     removeBookingAuthDraft()
   }, [authLoading, isAuthenticated, params])
@@ -270,11 +265,11 @@ export function BookingPage() {
 
   useEffect(() => {
     if (!data) return
-    if (redeemPoints > maxRedeemablePoints) {
-      setRedeemPoints(maxRedeemablePoints)
-      syncUrl(form, selectedRoomId, { step: step === 'review' ? 'review' : undefined, redeemPoints: maxRedeemablePoints })
+    if (redeemMilestoneOffer && !availableMilestoneOffer) {
+      setRedeemMilestoneOffer(false)
+      syncUrl(form, selectedRoomId, { step: step === 'review' ? 'review' : undefined, redeemMilestoneOffer: false })
     }
-  }, [data, form, maxRedeemablePoints, redeemPoints, selectedRoomId, step, syncUrl])
+  }, [availableMilestoneOffer, data, form, redeemMilestoneOffer, selectedRoomId, step, syncUrl])
 
   useEffect(() => {
     loadAvailabilityRef.current = loadAvailability
@@ -347,10 +342,13 @@ export function BookingPage() {
     syncUrl(form, selectedRoomId, { step: step === 'review' ? 'review' : undefined, paymentMode: mode })
   }
 
-  function chooseRedeemPoints(points) {
-    const nextPoints = Math.min(Math.max(0, Number(points || 0)), maxRedeemablePoints)
-    setRedeemPoints(nextPoints)
-    syncUrl(form, selectedRoomId, { step: step === 'review' ? 'review' : undefined, redeemPoints: nextPoints })
+  function chooseMilestoneOffer(enabled) {
+    if (enabled && !availableMilestoneOffer) {
+      showGuideToast('Special offer locked', 'Complete the next booking milestone to unlock this group offer.')
+      return
+    }
+    setRedeemMilestoneOffer(Boolean(enabled))
+    syncUrl(form, selectedRoomId, { step: step === 'review' ? 'review' : undefined, redeemMilestoneOffer: Boolean(enabled) })
   }
 
   function toggleAmenity(amenityId) {
@@ -466,7 +464,7 @@ export function BookingPage() {
         selectedRoomId: nextParams.get('roomTypeId') || selectedRoomId,
         selectedOfferId: nextParams.get('offerId') || selectedOfferId,
         selectedAmenityIds: queryList(nextParams, 'amenities'),
-        redeemPoints: Math.max(0, Number(nextParams.get('redeemPoints') || redeemPoints || 0)),
+        redeemMilestoneOffer: nextParams.get('milestoneOffer') === '1' || redeemMilestoneOffer,
         paymentMode: nextParams.get('paymentMode') === 'partial' ? 'partial' : paymentMode,
       }))
     } catch {
@@ -555,7 +553,7 @@ export function BookingPage() {
           offerId: selectedOfferForRoom?.id || undefined,
           selectedAmenityIds,
           gstClaim: form.gstClaim || { enabled: false },
-          redeemPoints: appliedRedeemPoints,
+          redeemMilestoneOffer,
           paymentMode,
           termsAccepted,
           termsVersion: TERMS_VERSION,
@@ -680,18 +678,14 @@ export function BookingPage() {
         selectedOffer={selectedOfferForRoom}
         selectedOfferId={selectedOfferId}
         offerDiscount={offerDiscount}
-        loyaltyDiscount={loyaltyDiscount}
-        redeemPoints={appliedRedeemPoints}
-        maxRedeemablePoints={maxRedeemablePoints}
-        availableLoyaltyPoints={availableLoyaltyPoints}
-        loyaltyRedemptionMinPoints={loyaltyRedemptionMinPoints}
-        loyaltyRedeemEligible={loyaltyRedeemEligible}
+        milestoneRewards={milestoneRewards}
+        milestoneDiscount={milestoneDiscount}
+        redeemMilestoneOffer={redeemMilestoneOffer}
         tax={tax}
         total={total}
         paymentMode={paymentMode}
         paymentDue={paymentDue}
         balanceDue={balanceDue}
-        loyaltyPoints={loyaltyPoints}
         offers={reviewOffers}
         status={status}
         guideToast={guideToast}
@@ -700,7 +694,7 @@ export function BookingPage() {
         onBack={backToRooms}
         onSelectOffer={chooseOffer}
         onToggleAmenity={toggleAmenity}
-        onRedeemPoints={chooseRedeemPoints}
+        onRedeemMilestoneOffer={chooseMilestoneOffer}
         onGuide={showGuideToast}
         onPaymentMode={choosePaymentMode}
         onPay={proceedToPayment}
@@ -879,6 +873,7 @@ function OfferChoiceCard({ offer, selected, onSelect, compact = false }) {
       </div>
       <h3 className={`mt-4 font-extrabold leading-tight ${compact ? 'text-lg' : 'text-xl'}`}>{offer.title}</h3>
       <p className={`mt-2 text-sm font-black ${selected ? 'text-white' : 'text-amberline'}`}>{formatOfferValue(offer)}</p>
+      <p className={`mt-1 text-xs font-bold ${selected ? 'text-white/72' : 'text-stone-500'}`}>{formatOfferUseLimit(offer)}</p>
       <p className={`mt-2 line-clamp-2 text-sm leading-6 ${selected ? 'text-white/78' : 'text-stone-600'}`}>{offer.description}</p>
     </button>
   )
@@ -894,7 +889,6 @@ function RoomCard({ room, adults, searched, selected, loading, offers, selectedO
   const cardDiscount = calculateOfferDiscount(offer, staySubtotal)
   const discountedStayTotal = Math.max(0, roundMoney(staySubtotal - cardDiscount))
   const roomPriceSaving = displayRoom.offer_price ? Math.max(0, Number(displayRoom.base_price || 0) - Number(displayRoom.offer_price || 0)) : 0
-  const possibleLoyaltyPoints = Math.max(0, Math.floor(discountedStayTotal / 100))
   const stayNights = Math.max(nights, 1)
   const roomUnits = Number(roomsCount || 1)
   const bestNightPrice = roundMoney((offer ? discountedStayTotal : staySubtotal) / stayNights / roomUnits)
@@ -918,9 +912,9 @@ function RoomCard({ room, adults, searched, selected, loading, offers, selectedO
             <RoomCardOfferPicker offers={offers} selectedOfferId={selectedOfferId} onSelectOffer={onSelectOffer} />
           ) : null}
           <div className={`rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 ${offers.length ? '' : 'sm:col-span-2'}`}>
-            <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-900">Loyalty</p>
-            <p className="text-sm font-extrabold text-charcoal">Earn {possibleLoyaltyPoints.toLocaleString('en-IN')} pts</p>
-            <p className="hidden text-xs font-semibold leading-5 text-stone-600 sm:block">Redeem saved points at checkout. 1 point = Rs 100.</p>
+            <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-900">Special offers</p>
+            <p className="text-sm font-extrabold text-charcoal">Bookings count across hotels</p>
+            <p className="hidden text-xs font-semibold leading-5 text-stone-600 sm:block">Unlock a meal or drink at 5 rooms, then Rs 1,000 and Rs 2,000 off milestones.</p>
           </div>
         </div>
         <div className="mt-auto flex flex-wrap gap-4 border-t border-mist pt-3 text-sm font-semibold text-stone-600">
@@ -1105,18 +1099,14 @@ function BookingReviewPage({
   selectedOffer,
   selectedOfferId,
   offerDiscount,
-  loyaltyDiscount,
-  redeemPoints,
-  maxRedeemablePoints,
-  availableLoyaltyPoints,
-  loyaltyRedemptionMinPoints,
-  loyaltyRedeemEligible,
+  milestoneRewards,
+  milestoneDiscount,
+  redeemMilestoneOffer,
   tax,
   total,
   paymentMode,
   paymentDue,
   balanceDue,
-  loyaltyPoints,
   offers,
   status,
   guideToast,
@@ -1125,7 +1115,7 @@ function BookingReviewPage({
   onBack,
   onSelectOffer,
   onToggleAmenity,
-  onRedeemPoints,
+  onRedeemMilestoneOffer,
   onGuide,
   onPaymentMode,
   onPay,
@@ -1137,6 +1127,7 @@ function BookingReviewPage({
   const [termsOpen, setTermsOpen] = useState(false)
   const tenantMode = resolveTenantFromLocation()
   const selectedOfferVisual = selectedOffer ? getOfferVisual(selectedOffer) : null
+  const milestoneOffer = milestoneRewards?.bestEligibleOffer || null
   return (
     <main className="bg-ivory">
       <GuideToast toast={guideToast} />
@@ -1234,7 +1225,7 @@ function BookingReviewPage({
                   ))}
                   <Line label="Stay subtotal" value={`Rs ${grossSubtotal.toLocaleString('en-IN')}`} />
                   {selectedOffer ? <Line label={selectedOffer.title} value={`- Rs ${offerDiscount.toLocaleString('en-IN')}`} /> : null}
-                  {redeemPoints ? <Line label={`${redeemPoints} group loyalty point${redeemPoints === 1 ? '' : 's'}`} value={`- Rs ${loyaltyDiscount.toLocaleString('en-IN')}`} /> : null}
+                  {redeemMilestoneOffer && milestoneOffer ? <Line label={milestoneOffer.title} value={milestoneDiscount ? `- Rs ${milestoneDiscount.toLocaleString('en-IN')}` : 'Included'} /> : null}
                   <Line label="Taxable subtotal" value={`Rs ${subtotal.toLocaleString('en-IN')}`} />
                   <Line label={`Taxes (${FIXED_TAX_RATE}%)`} value={`Rs ${tax.toLocaleString('en-IN')}`} />
                 </div>
@@ -1247,20 +1238,15 @@ function BookingReviewPage({
               ) : offers.length ? (
                 <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">Select an offer card to apply a discount before payment.</p>
               ) : null}
-              {isAuthenticated && loyaltyRedeemEligible ? (
-                <LoyaltyRedeemControl
-                  availablePoints={availableLoyaltyPoints}
-                  maxRedeemablePoints={maxRedeemablePoints}
-                  redeemPoints={redeemPoints}
-                  discount={loyaltyDiscount}
-                  subtotalBeforeRedemption={subtotalBeforeRedemption}
-                  redemptionMinPoints={loyaltyRedemptionMinPoints}
-                  eligible={loyaltyRedeemEligible}
-                  onChange={onRedeemPoints}
-                  onUnavailableAction={onGuide}
-                  disabled={false}
-                />
-              ) : null}
+              <MilestoneOfferControl
+                rewards={milestoneRewards}
+                discount={milestoneDiscount}
+                selected={redeemMilestoneOffer}
+                subtotalBeforeRedemption={subtotalBeforeRedemption}
+                isAuthenticated={isAuthenticated}
+                onChange={onRedeemMilestoneOffer}
+                onUnavailableAction={onGuide}
+              />
               <div className="mt-4 flex items-end justify-between">
                 <span className="text-sm font-bold text-stone-500">Booking total</span>
                 <span className="text-2xl font-black">Rs {total.toLocaleString('en-IN')}</span>
@@ -1276,9 +1262,9 @@ function BookingReviewPage({
                 />
                 <PaymentOption
                   active={paymentMode === 'partial'}
-                  title={`Pay ${PARTIAL_PAYMENT_PERCENT}% advance`}
+                  title={`Pay only ${PARTIAL_PAYMENT_PERCENT}% now`}
                   amount={roundMoney(total * (PARTIAL_PAYMENT_PERCENT / 100))}
-                  note={`Pay the balance Rs ${roundMoney(total * ((100 - PARTIAL_PAYMENT_PERCENT) / 100)).toLocaleString('en-IN')} at the hotel.`}
+                  note={`Secure the booking now. Pay the remaining Rs ${roundMoney(total * ((100 - PARTIAL_PAYMENT_PERCENT) / 100)).toLocaleString('en-IN')} at the hotel.`}
                   onClick={() => onPaymentMode('partial')}
                 />
               </div>
@@ -1287,8 +1273,8 @@ function BookingReviewPage({
                 <Line label="Balance due" value={`Rs ${balanceDue.toLocaleString('en-IN')}`} />
               </div>
               <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3">
-                <p className="flex items-center gap-2 text-sm font-extrabold text-amber-900"><Gift size={17} /> Loyalty rewards</p>
-                <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">Every Rs 100 earns 1 group point. This booking can earn {loyaltyPoints.toLocaleString('en-IN')} point{loyaltyPoints === 1 ? '' : 's'} after payment confirmation, redeemable at any hotel.</p>
+                <p className="flex items-center gap-2 text-sm font-extrabold text-amber-900"><Gift size={17} /> Special offer journey</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">Room bookings count across every hotel. Redeeming a milestone offer on a confirmed booking resets your journey to zero.</p>
               </div>
 
               {isAuthenticated ? (
@@ -1418,71 +1404,70 @@ function GstClaimCard({ value = {}, onChange }) {
   )
 }
 
-function LoyaltyRedeemControl({ availablePoints, maxRedeemablePoints, redeemPoints, discount, subtotalBeforeRedemption, redemptionMinPoints, eligible, onChange, onUnavailableAction, disabled }) {
-  const progress = redemptionMinPoints > 0 ? Math.min(100, Math.round((Number(availablePoints || 0) / redemptionMinPoints) * 100)) : 100
-  const pointsRemaining = Math.max(0, Number(redemptionMinPoints || 0) - Number(availablePoints || 0))
-  const cannotRedeem = disabled || !eligible || maxRedeemablePoints < 1
+const bookingMilestoneSegments = [
+  { from: 0, to: 5, title: 'Meal/drink' },
+  { from: 5, to: 10, title: 'Rs 1,000 off' },
+  { from: 10, to: 20, title: 'Rs 2,000 off' },
+]
 
-  function showUnavailableGuide() {
-    if (disabled) {
-      onUnavailableAction?.('Login required', 'Sign in or create your group account to use loyalty points.')
+function MilestoneOfferControl({ rewards = {}, discount, selected, subtotalBeforeRedemption, isAuthenticated, onChange, onUnavailableAction }) {
+  const offer = rewards.bestEligibleOffer || null
+  const nextOffer = rewards.nextOffer || null
+  const completed = Number(rewards.completedRoomBookings || 0)
+  const cappedCompleted = Math.min(Math.max(completed, 0), 20)
+
+  function explainLocked() {
+    if (!isAuthenticated) {
+      onUnavailableAction?.('Login required', 'Sign in or create your group account to use special milestone offers.')
       return
     }
-    if (!eligible) {
-      onUnavailableAction?.('Keep collecting points', `You can redeem after reaching ${Number(redemptionMinPoints || 0).toLocaleString('en-IN')} group points.`)
+    if (nextOffer) {
+      onUnavailableAction?.('Special offer locked', `${Math.max(0, nextOffer.milestone - completed).toLocaleString('en-IN')} more room booking${nextOffer.milestone - completed === 1 ? '' : 's'} unlock ${nextOffer.title}.`)
       return
     }
-    onUnavailableAction?.('No points available for this booking', `Points can be used when the subtotal is at least Rs 101 before tax.`)
+    onUnavailableAction?.('Special offer locked', `This offer needs a payable subtotal above Rs 1. Current subtotal is Rs ${subtotalBeforeRedemption.toLocaleString('en-IN')}.`)
   }
 
   return (
     <div className="mt-4 rounded-lg border border-[#d8c7a5] bg-[#fff8ea] p-4 shadow-sm">
       <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
         <div>
-          <p className="flex items-center gap-2 text-sm font-extrabold text-charcoal"><Gift size={17} className="text-amberline" /> Redeem group loyalty points</p>
-          <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">You have {Number(availablePoints || 0).toLocaleString('en-IN')} group point{availablePoints === 1 ? '' : 's'}. Redemption opens at {Number(redemptionMinPoints || 0).toLocaleString('en-IN')} points. 1 point = Rs 100.</p>
-        </div>
-        {discount ? <span className="rounded-md bg-white px-3 py-2 text-sm font-black text-emerald-800">- Rs {discount.toLocaleString('en-IN')}</span> : null}
-      </div>
-      <div className="mt-4 overflow-hidden rounded-full bg-white shadow-inner">
-        <div className="h-2.5 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)] transition-all duration-500" style={{ width: `${progress}%` }} />
-      </div>
-      <p className="mt-2 text-xs font-bold text-stone-600">
-        {eligible ? 'Eligible to redeem on checkout.' : `${pointsRemaining.toLocaleString('en-IN')} more point${pointsRemaining === 1 ? '' : 's'} needed before redemption.`}
-      </p>
-      <div className="mt-4 grid gap-3">
-        <div className="relative">
-          <input
-            type="range"
-            min="0"
-            max={maxRedeemablePoints}
-            value={redeemPoints}
-            onChange={(event) => onChange(Number(event.target.value))}
-            disabled={cannotRedeem}
-            className="w-full accent-[#7f1d1d] disabled:opacity-50"
-            aria-label="Redeem loyalty points"
-          />
-          {cannotRedeem ? <button type="button" className="absolute inset-0 cursor-not-allowed rounded-md" aria-label="Why loyalty points cannot be redeemed" onClick={showUnavailableGuide} /> : null}
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative sm:max-w-36">
-            <input
-              className="input h-11"
-              type="number"
-              min="0"
-              max={maxRedeemablePoints}
-              value={redeemPoints}
-              onChange={(event) => onChange(Number(event.target.value))}
-              disabled={cannotRedeem}
-              aria-label="Loyalty points to redeem"
-            />
-            {cannotRedeem ? <button type="button" className="absolute inset-0 cursor-not-allowed rounded-md" aria-label="Why loyalty points cannot be redeemed" onClick={showUnavailableGuide} /> : null}
-          </div>
-          <p className="text-xs font-semibold leading-5 text-stone-600">
-            {disabled ? 'Login to redeem points.' : !eligible ? 'Redemption control unlocks after the required point balance.' : maxRedeemablePoints ? `Up to ${maxRedeemablePoints.toLocaleString('en-IN')} points can be used on this booking before tax.` : `No points can be used on Rs ${subtotalBeforeRedemption.toLocaleString('en-IN')} subtotal.`}
+          <p className="flex items-center gap-2 text-sm font-extrabold text-charcoal"><Gift size={17} className="text-amberline" /> Milestone special offer</p>
+          <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">
+            {offer ? `${completed.toLocaleString('en-IN')} room bookings completed since your last redemption. You can redeem ${offer.title} now.` : `${completed.toLocaleString('en-IN')} room bookings completed since your last redemption.`}
           </p>
         </div>
+        {selected && offer ? <span className="rounded-md bg-white px-3 py-2 text-sm font-black text-emerald-800">{discount ? `- Rs ${discount.toLocaleString('en-IN')}` : 'Meal/drink'}</span> : null}
       </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_1fr_2fr]">
+        {bookingMilestoneSegments.map((segment) => {
+          const segmentProgress = Math.max(0, Math.min(cappedCompleted, segment.to) - segment.from)
+          const fill = Math.round((segmentProgress / (segment.to - segment.from)) * 100)
+          const complete = completed >= segment.to
+          return (
+            <div key={segment.to} className="rounded-md border border-amber-100 bg-white p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-xs font-black text-charcoal">{segment.title}</span>
+                <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[0.65rem] font-black ${complete ? 'bg-emerald-50 text-emerald-700' : 'bg-bone text-stone-500'}`}>{segment.from}-{segment.to}</span>
+              </div>
+              <div className="mt-2 overflow-hidden rounded-full bg-bone shadow-inner">
+                <div className="h-1.5 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)] transition-all duration-500" style={{ width: `${fill}%` }} />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <p className="mt-2 text-xs font-bold text-stone-600">
+        {offer ? `Redeems on this booking and resets the journey to 0 after payment confirmation. Your used offer stays saved in account history.` : nextOffer ? `${Math.max(0, nextOffer.milestone - completed).toLocaleString('en-IN')} more room booking${nextOffer.milestone - completed === 1 ? '' : 's'} to unlock ${nextOffer.title}.` : 'All milestone offers are complete.'}
+      </p>
+      <button
+        type="button"
+        className={`mt-4 flex w-full items-center justify-between gap-3 rounded-md border px-3 py-3 text-left text-sm font-extrabold transition ${selected && offer ? 'border-emerald-300 bg-emerald-50 text-emerald-900' : 'border-mist bg-white text-charcoal hover:shadow-soft'} ${!offer ? 'cursor-not-allowed opacity-80' : ''}`}
+        onClick={() => (offer ? onChange(!selected) : explainLocked())}
+      >
+        <span>{offer ? offer.title : nextOffer ? `Next: ${nextOffer.title}` : 'No special offer available'}</span>
+        <span className="shrink-0 rounded-md bg-bone px-2 py-1 text-xs">{selected && offer ? 'Applied' : offer ? 'Apply' : 'Locked'}</span>
+      </button>
     </div>
   )
 }
@@ -1930,6 +1915,12 @@ function calculateOfferDiscount(offer, subtotal) {
   return roundMoney(Math.min(rawDiscount, base))
 }
 
+function calculateMilestoneOfferDiscount(offer, subtotal) {
+  if (!offer) return 0
+  const value = Math.max(0, Number(offer.discountAmount || 0))
+  return roundMoney(Math.min(value, Math.max(0, Number(subtotal || 0) - 1)))
+}
+
 function offerAppliesToRoom(offer, roomTypeId) {
   if (!offer) return false
   if (isAllRoomOffer(offer) || !roomTypeId) return true
@@ -1954,6 +1945,14 @@ function formatOfferValue(offer) {
   const value = Number(offer.discount_value || 0)
   if (offer.discount_type === 'percentage') return `${value}% off`
   return `Rs ${value.toLocaleString('en-IN')} off`
+}
+
+function formatOfferUseLimit(offer) {
+  const limit = Number(offer?.redemption_limit_per_user || 0)
+  if (!limit) return 'Reusable on unlimited bookings'
+  const used = Number(offer?.current_user_redemptions || 0)
+  const remaining = Math.max(0, limit - used)
+  return `${remaining.toLocaleString('en-IN')} booking use${remaining === 1 ? '' : 's'} left for you`
 }
 
 function getHotelHeroImages(hotel) {

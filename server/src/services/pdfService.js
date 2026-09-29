@@ -273,7 +273,7 @@ function drawBillingTable(doc, y, { booking, currency, pricing, selectedAmenitie
     ['Room subtotal', money(currency, pricing.roomSubtotal || booking.subtotal_amount)],
     ...(selectedAmenities.length ? [['Selected amenities', money(currency, pricing.amenitySubtotal || 0)]] : []),
     ...(metadata.offer?.discountAmount ? [[`Offer: ${metadata.offer.title || 'Discount'}`, `-${money(currency, metadata.offer.discountAmount)}`]] : []),
-    ...(metadata.loyaltyRedemption?.amount ? [['Loyalty redemption', `-${money(currency, metadata.loyaltyRedemption.amount)}`]] : []),
+    ...(metadata.milestoneRedemption ? [[metadata.milestoneRedemption.title || 'Special offer', Number(metadata.milestoneRedemption.discountAmount || 0) ? `-${money(currency, metadata.milestoneRedemption.discountAmount)}` : 'Redeemed']] : []),
     ['Taxable subtotal', money(currency, booking.subtotal_amount)],
     ['CGST (2.5%)', money(currency, halfTax)],
     ['IGST (2.5%)', money(currency, halfTax)],

@@ -18,7 +18,7 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
 
   const pdf = await import('node:fs/promises').then((fs) => fs.readFile(pdfPath))
   const paymentPlan = booking.metadata?.paymentPlan || {}
-  const loyalty = booking.metadata?.loyaltyRedemption
+  const milestone = booking.metadata?.milestoneRedemption
   const gstClaim = booking.metadata?.gstClaim || booking.gst_claim || {}
   const paidNow = paymentPlan.paidAmount ?? booking.total_amount ?? 0
   const balanceDue = paymentPlan.balanceDue ?? 0
@@ -38,7 +38,7 @@ export async function sendBookingConfirmation({ hotel, room, booking, invoice, p
         ${booking.metadata?.offer?.title ? `<p><strong>Offer applied:</strong> ${booking.metadata.offer.title}</p>` : ''}
         ${booking.metadata?.selectedAmenities?.length ? `<p><strong>Amenities:</strong> ${booking.metadata.selectedAmenities.map((amenity) => amenity.name).join(', ')}</p>` : ''}
         ${gstClaim.enabled ? `<p><strong>GST claim:</strong> ${gstClaim.companyName || '-'}<br/><strong>GSTIN:</strong> ${gstClaim.gstNumber || '-'}<br/><strong>Company address:</strong> ${gstClaim.companyAddress || '-'}</p>` : ''}
-        ${loyalty?.points ? `<p><strong>Group loyalty redeemed:</strong> ${loyalty.points} points (${booking.currency} ${Number(loyalty.amount || 0).toLocaleString('en-IN')})</p>` : ''}
+        ${milestone?.title ? `<p><strong>Special offer redeemed:</strong> ${milestone.title}${Number(milestone.discountAmount || 0) ? ` (${booking.currency} ${Number(milestone.discountAmount || 0).toLocaleString('en-IN')} off)` : ''}</p>` : ''}
   `
   const attachments = [
     {

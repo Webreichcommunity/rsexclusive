@@ -7,7 +7,7 @@ import { validate } from '../middleware/validate.js'
 import { query, transaction } from '../db/pool.js'
 import { deleteFirebaseUser } from '../services/firebaseAdminService.js'
 import { recordActivity } from '../services/activityService.js'
-import { ensureBookingReceipt } from '../services/bookingService.js'
+import { ensureBookingReceipt, getBookingMilestoneProgress } from '../services/bookingService.js'
 import { ensureOfferKindColumn, ensureRoomSortOrderColumn } from '../services/hotelService.js'
 import { createAsyncRouter } from '../utils/asyncRouter.js'
 import { badRequest, conflict, notFound } from '../utils/errors.js'
@@ -131,9 +131,7 @@ const cancellationReviewSchema = z.object({
   adminMessage: z.string().max(800).optional(),
 })
 
-const hotelSettingsSchema = z.object({
-  loyaltyRedemptionMinPoints: z.coerce.number().int().min(0).max(1000000).default(1000),
-})
+const hotelSettingsSchema = z.object({})
 
 const amenitySchema = z.object({
   name: z.string().min(2),
@@ -164,6 +162,7 @@ const offerSchema = z.object({
   imageUrl: z.string().url().or(z.literal('')).optional(),
   audienceType: z.enum(['general', 'repeat_guest']).default('general'),
   minCompletedBookings: z.coerce.number().int().min(0).default(0),
+  redemptionLimitPerUser: z.coerce.number().int().min(0).max(1000).default(1),
   badge: z.string().max(40).optional(),
   highlightColor: z.string().max(40).optional(),
 })
@@ -364,21 +363,13 @@ adminRoutes.get('/dashboard', async (req, res) => {
 })
 
 adminRoutes.patch('/hotel-settings', requireRole('hotel_admin', 'super_admin'), validate(hotelSettingsSchema), async (req, res) => {
-  const { rows } = await query(
-    `UPDATE hotels
-     SET policies = jsonb_set(coalesce(policies, '{}'::jsonb), '{loyaltyRedemptionMinPoints}', to_jsonb($1::int), true),
-         updated_at = now()
-     WHERE id = $2
-     RETURNING id, name, policies`,
-    [req.body.loyaltyRedemptionMinPoints, req.hotel.id],
-  )
-  res.json({ hotel: rows[0] })
+  res.json({ hotel: { id: req.hotel.id, name: req.hotel.name, policies: req.hotel.policies || {} } })
   recordActivity({
     req,
-    action: 'hotel_loyalty_settings_updated',
+    action: 'hotel_special_offer_settings_reviewed',
     entityType: 'hotel',
     entityId: req.hotel.id,
-    metadata: { loyaltyRedemptionMinPoints: req.body.loyaltyRedemptionMinPoints },
+    metadata: { milestones: [5, 10, 20] },
   })
 })
 
@@ -512,7 +503,11 @@ adminRoutes.get('/users', async (req, res) => {
      LIMIT 300`,
     [req.hotel.id],
   )
-  res.json({ users: rows })
+  const users = await Promise.all(rows.map(async (user) => ({
+    ...user,
+    milestone_rewards: await getBookingMilestoneProgress({ query }, user.id),
+  })))
+  res.json({ users })
 })
 
 adminRoutes.get('/users/:userId', async (req, res) => {
@@ -531,15 +526,9 @@ adminRoutes.get('/users/:userId', async (req, res) => {
        u.id, u.email, u.full_name, u.phone, u.profile, u.created_at,
        coalesce(bm.bookings, 0)::int AS bookings,
        coalesce(bm.revenue, 0)::numeric AS revenue,
-       bm.last_booking_at,
-       coalesce(la.points_balance, 0)::int AS loyalty_points
+       bm.last_booking_at
      FROM users u
      LEFT JOIN booking_metrics bm ON bm.user_id = u.id
-     LEFT JOIN LATERAL (
-       SELECT coalesce(sum(points_balance), 0)::int AS points_balance
-       FROM loyalty_accounts
-       WHERE user_id = u.id
-     ) la ON true
      WHERE u.id = $2 AND u.role = 'customer'
      LIMIT 1`,
     [req.hotel.id, req.params.userId],
@@ -565,7 +554,14 @@ adminRoutes.get('/users/:userId', async (req, res) => {
     [req.hotel.id, req.params.userId],
   )
 
-  res.json({ user: rows[0], bookings: bookingRows, feedback: feedbackRows })
+  res.json({
+    user: {
+      ...rows[0],
+      milestone_rewards: await getBookingMilestoneProgress({ query }, req.params.userId, { includeHistory: true }),
+    },
+    bookings: bookingRows,
+    feedback: feedbackRows,
+  })
 })
 
 adminRoutes.get('/feedback', async (req, res) => {
@@ -609,7 +605,6 @@ adminRoutes.delete('/users/:userId', requireRole('hotel_admin', 'super_admin'), 
   await transaction(async (db) => {
     await db.query('DELETE FROM customers WHERE user_id = $1 AND hotel_id = $2', [req.params.userId, req.hotel.id])
     await db.query('UPDATE bookings SET user_id = null, customer_id = null WHERE user_id = $1 AND hotel_id = $2', [req.params.userId, req.hotel.id])
-    await db.query('DELETE FROM loyalty_accounts WHERE user_id = $1', [req.params.userId])
     await db.query('DELETE FROM users WHERE id = $1', [req.params.userId])
   })
   res.status(204).send()
@@ -1714,9 +1709,9 @@ adminRoutes.post('/offers', requireRole('hotel_admin', 'super_admin'), validate(
   const { rows } = await query(
     `INSERT INTO offers (
        hotel_id, offer_kind, title, description, code, discount_type, discount_value, starts_at,
-       ends_at, active, image_url, audience_type, min_completed_bookings, badge, highlight_color, room_type_ids
+       ends_at, active, image_url, audience_type, min_completed_bookings, redemption_limit_per_user, badge, highlight_color, room_type_ids
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::uuid[])
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::uuid[])
      RETURNING *`,
     [
       req.hotel.id,
@@ -1732,6 +1727,7 @@ adminRoutes.post('/offers', requireRole('hotel_admin', 'super_admin'), validate(
       offerKind === 'showcase' ? null : req.body.imageUrl || null,
       offerKind === 'showcase' ? 'general' : req.body.audienceType,
       offerKind === 'showcase' ? 0 : req.body.minCompletedBookings,
+      offerKind === 'showcase' ? 0 : req.body.redemptionLimitPerUser,
       req.body.badge || '',
       req.body.highlightColor || '#f59e0b',
       roomTypeIds || [],
@@ -1774,11 +1770,12 @@ adminRoutes.patch('/offers/:offerId', requireRole('hotel_admin', 'super_admin'),
          image_url = CASE WHEN $1 = 'showcase' THEN null WHEN $10::text IS NULL THEN image_url ELSE nullif($10, '') END,
          audience_type = CASE WHEN $1 = 'showcase' THEN 'general' ELSE coalesce($11, audience_type) END,
          min_completed_bookings = CASE WHEN $1 = 'showcase' THEN 0 ELSE coalesce($12::int, min_completed_bookings) END,
-         badge = coalesce($13, badge),
-         highlight_color = coalesce($14, highlight_color),
-         room_type_ids = CASE WHEN $1 = 'showcase' THEN '{}'::uuid[] ELSE coalesce($15::uuid[], room_type_ids) END,
+         redemption_limit_per_user = CASE WHEN $1 = 'showcase' THEN 0 ELSE coalesce($13::int, redemption_limit_per_user) END,
+         badge = coalesce($14, badge),
+         highlight_color = coalesce($15, highlight_color),
+         room_type_ids = CASE WHEN $1 = 'showcase' THEN '{}'::uuid[] ELSE coalesce($16::uuid[], room_type_ids) END,
          updated_at = now()
-       WHERE id = $16 AND hotel_id = $17
+       WHERE id = $17 AND hotel_id = $18
        RETURNING *`,
       [
         nextOfferKind,
@@ -1793,6 +1790,7 @@ adminRoutes.patch('/offers/:offerId', requireRole('hotel_admin', 'super_admin'),
         body.imageUrl,
         body.audienceType,
         body.minCompletedBookings,
+        body.redemptionLimitPerUser,
         body.badge,
         body.highlightColor,
         nextRoomTypeIds,

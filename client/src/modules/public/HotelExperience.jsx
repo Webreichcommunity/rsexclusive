@@ -92,10 +92,12 @@ export function HotelExperience() {
             <h1 className="max-w-4xl text-5xl font-black leading-[0.98] text-white drop-shadow-[0_6px_26px_rgba(0,0,0,0.55)] md:text-7xl">
               {cleanHotelName(hotel.name)}
             </h1>
-            <p className="mt-6 max-w-2xl text-base font-medium leading-8 text-white/88 md:text-lg">{premiumHotelSummary(hotel)}</p>
+            <p className="mt-6 max-w-2xl text-base font-medium leading-8 text-white/88 md:text-lg">
+              {premiumHotelSummary(hotel)} Book direct with live rooms, real offers, and the option to secure your stay with only 25% payment now.
+            </p>
             <div className="mt-8 flex flex-wrap gap-3 text-sm font-semibold text-white/90">
               <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-amberline/88 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><CalendarDays size={16} className="text-amber-100" /> 24 hours check-in</span>
-              <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-zinc-900/70 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><CreditCard size={16} className="text-amber-100" /> 25% advance</span>
+              <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-zinc-900/70 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><CreditCard size={16} className="text-amber-100" /> Pay only 25% now</span>
             </div>
           </FadeIn>
 
@@ -105,7 +107,7 @@ export function HotelExperience() {
               onSubmit={(event) => event.preventDefault()}
             >
               <p className="text-xs font-black uppercase tracking-[0.16em] text-amber-100">Reserve directly</p>
-              <h2 className="mt-2 text-2xl font-black text-white">Plan your stay</h2>
+              <h2 className="mt-2 text-2xl font-black text-white">Book direct in minutes</h2>
               <div className="mt-4 grid grid-cols-2 gap-3">
                 <StayDateRangePicker
                   className="col-span-2"
@@ -119,7 +121,10 @@ export function HotelExperience() {
                 <Field label="Children (1-7 yrs)"><Stepper value={search.children} min={0} onChange={(value) => setSearch({ ...search, children: value })} /></Field>
                 <Field label="Rooms" className="col-span-2 sm:col-span-1"><Stepper value={search.roomsCount} min={1} onChange={(value) => setSearch({ ...search, roomsCount: value })} /></Field>
               </div>
-              <Link to={bookingUrl} className="btn-primary mt-5 w-full"><CalendarDays size={18} /> Search Rooms</Link>
+              <div className="mt-4 rounded-md border border-white/20 bg-white/12 p-3 text-sm font-semibold leading-6 text-white/82">
+                Secure your room with 25% online payment and pay the remaining balance at the hotel.
+              </div>
+              <Link to={bookingUrl} className="btn-primary mt-5 w-full"><CalendarDays size={18} /> Check rooms and book direct</Link>
             </form>
           </FadeIn>
         </div>
@@ -470,7 +475,6 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
   const availabilityUrl = `${bookingUrl}&roomTypeId=${room.id}`
   const detailsUrl = `${availabilityUrl}&step=details`
   const roomPriceSaving = displayRoom.offer_price ? Math.max(0, Number(displayRoom.base_price || 0) - Number(displayRoom.offer_price || 0)) : 0
-  const possibleLoyaltyPoints = Math.max(0, Math.floor(Number(displayPrice || 0) / 100))
   return (
     <StaggerItem>
       <article className="group grid overflow-visible rounded-lg border border-stone-200 bg-white shadow-soft transition duration-300 hover:-translate-y-1 hover:border-amberline/35 hover:shadow-card md:grid-cols-[minmax(220px,0.9fr)_minmax(0,1.35fr)] xl:grid-cols-[minmax(280px,0.95fr)_minmax(0,1.4fr)_240px]">
@@ -485,9 +489,9 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
           <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1.5fr)_minmax(190px,0.8fr)]">
             {offers.length ? <HomeRoomOfferPicker offers={offers} availabilityUrl={availabilityUrl} /> : null}
             <div className={`rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 ${offers.length ? '' : 'sm:col-span-2'}`}>
-              <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-900">Loyalty</p>
-              <p className="text-sm font-extrabold text-charcoal">Earn {possibleLoyaltyPoints.toLocaleString('en-IN')} pts</p>
-              <p className="hidden text-xs font-semibold leading-5 text-stone-600 sm:block">Saved points can reduce checkout total later.</p>
+              <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-900">Special offers</p>
+              <p className="text-sm font-extrabold text-charcoal">Bookings count across hotels</p>
+              <p className="hidden text-xs font-semibold leading-5 text-stone-600 sm:block">Unlock a meal or drink, then Rs 1,000 and Rs 2,000 off milestones.</p>
             </div>
           </div>
         </div>

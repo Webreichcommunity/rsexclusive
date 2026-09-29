@@ -5,7 +5,7 @@ import { optionalTenant, requireTenant } from '../middleware/tenant.js'
 import { validate } from '../middleware/validate.js'
 import { getFirebaseAuth } from '../services/firebaseAdminService.js'
 import { availabilitySchema, searchAvailability } from '../services/availabilityService.js'
-import { createBookingHold, confirmBookingPayment, releaseExpiredBookingHolds } from '../services/bookingService.js'
+import { createBookingHold, confirmBookingPayment, getBookingMilestoneProgress, releaseExpiredBookingHolds } from '../services/bookingService.js'
 import { getHotelProfile, listActiveHotels, listAmenitiesForHotel, listFaqsForHotel, listOffersForHotel, listRoomsForHotel } from '../services/hotelService.js'
 import { createAsyncRouter } from '../utils/asyncRouter.js'
 import { createCache } from '../utils/cache.js'
@@ -13,12 +13,6 @@ import { badRequest, conflict, forbidden, unauthorized } from '../utils/errors.j
 
 export const publicRoutes = createAsyncRouter()
 const publicCache = createCache(60_000)
-const DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS = 1000
-
-function getLoyaltyRedemptionMinPoints(hotel) {
-  return Math.max(0, Number(hotel?.policies?.loyaltyRedemptionMinPoints || DEFAULT_LOYALTY_REDEMPTION_MIN_POINTS))
-}
-
 function requireActiveHotel(req, _res, next) {
   if (req.hotel && req.hotel.status !== 'active') {
     return next(forbidden('This hotel website is temporarily suspended. Please contact WebReich for support.'))
@@ -37,7 +31,7 @@ const bookingSchema = z.object({
     gstNumber: z.string().max(32).optional(),
     companyAddress: z.string().max(500).optional(),
   }).optional(),
-  redeemPoints: z.coerce.number().int().min(0).default(0),
+  redeemMilestoneOffer: z.coerce.boolean().default(false),
   checkIn: z.coerce.date(),
   checkOut: z.coerce.date(),
   roomsCount: z.coerce.number().int().positive().default(1),
@@ -93,22 +87,15 @@ publicRoutes.get('/hotels', async (_req, res) => {
 })
 
 publicRoutes.get('/tenant', requireTenant, optionalAuthenticate, requireActiveHotel, async (req, res) => {
-  const [hotel, rooms, amenities, offers, faqs, loyaltyRows] = await Promise.all([
+  const [hotel, rooms, amenities, offers, faqs, milestoneRewards] = await Promise.all([
     getHotelProfile(req.hotel.id),
     listRoomsForHotel(req.hotel.id),
     listAmenitiesForHotel(req.hotel.id),
     listOffersForHotel(req.hotel.id, req.user?.id || null),
     listFaqsForHotel(req.hotel.id),
-    req.user
-      ? query(
-          `SELECT coalesce(sum(points_balance), 0)::int AS points
-           FROM loyalty_accounts
-           WHERE user_id = $1`,
-          [req.user.id],
-        )
-      : Promise.resolve({ rows: [] }),
+    getBookingMilestoneProgress({ query }, req.user?.id || null),
   ])
-  res.json({ hotel, rooms, amenities, offers, faqs, loyaltyPoints: loyaltyRows.rows[0]?.points || 0 })
+  res.json({ hotel, rooms, amenities, offers, faqs, milestoneRewards })
 })
 
 publicRoutes.post('/auth/register', optionalTenant, requireActiveHotel, validate(registerSchema), async (req, res) => {
@@ -263,12 +250,7 @@ publicRoutes.get('/me', optionalTenant, authenticate, async (req, res) => {
     hotelAdminHotel = rows[0] || null
   }
 
-  const { rows: loyaltyRows } = await query(
-    `SELECT coalesce(sum(points_balance), 0)::int AS points
-     FROM loyalty_accounts
-     WHERE user_id = $1`,
-    [req.user.id],
-  )
+  const milestoneRewards = await getBookingMilestoneProgress({ query }, req.user.id, { includeHistory: true })
 
   res.json({
     user: {
@@ -279,8 +261,7 @@ publicRoutes.get('/me', optionalTenant, authenticate, async (req, res) => {
       profile: req.user.profile || {},
       role: req.user.role,
       hotel: hotelAdminHotel,
-      loyaltyPoints: loyaltyRows[0]?.points || 0,
-      loyaltyRedemptionMinPoints: getLoyaltyRedemptionMinPoints(req.hotel),
+      milestoneRewards,
     },
   })
 })

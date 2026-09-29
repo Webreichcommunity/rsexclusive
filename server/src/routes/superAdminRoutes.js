@@ -582,8 +582,6 @@ async function collectHotelScopedUsers(db, hotelId) {
        SELECT user_id FROM bookings WHERE hotel_id = $1 AND user_id IS NOT NULL
        UNION
        SELECT user_id FROM hotel_feedback WHERE hotel_id = $1 AND user_id IS NOT NULL
-       UNION
-       SELECT user_id FROM loyalty_accounts WHERE hotel_id = $1
      )
      SELECT u.id, u.firebase_uid
      FROM users u
@@ -603,12 +601,6 @@ async function collectHotelScopedUsers(db, hotelId) {
        )
        AND NOT EXISTS (
          SELECT 1 FROM hotel_feedback hf WHERE hf.user_id = u.id AND hf.hotel_id <> $1
-       )
-       AND NOT EXISTS (
-         SELECT 1
-         FROM loyalty_accounts la
-         WHERE la.user_id = u.id
-           AND (la.hotel_id IS NULL OR la.hotel_id <> $1)
        )`,
     [hotelId],
   )
