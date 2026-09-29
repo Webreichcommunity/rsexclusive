@@ -83,7 +83,7 @@ export function LoginPage() {
       return
     }
     if (user.role === 'hotel_admin') {
-      rememberConsoleSession(user, buildTenantPath('/admin', { isTenant: true, key: user.hotel?.slug || user.hotel?.subdomain, source: 'path' }))
+      rememberConsoleSession(user, buildTenantPath('/admin', { isTenant: true, key: user.hotel?.subdomain || user.hotel?.slug, source: 'path' }))
       navigateToHotelPath(navigate, user.hotel, '/admin', { replace: true })
       return
     }

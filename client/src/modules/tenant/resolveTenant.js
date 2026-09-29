@@ -136,7 +136,7 @@ function getPathTenantKey(pathname) {
 function getHotelKey(hotelOrSubdomain) {
   const value = typeof hotelOrSubdomain === 'string'
     ? hotelOrSubdomain
-    : hotelOrSubdomain?.slug || hotelOrSubdomain?.subdomain
+    : hotelOrSubdomain?.subdomain || hotelOrSubdomain?.slug
   return normalizeTenantKey(value)
 }
 

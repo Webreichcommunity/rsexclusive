@@ -243,9 +243,9 @@ publicRoutes.get('/me', optionalTenant, authenticate, async (req, res) => {
        FROM hotel_admins ha
        JOIN hotels h ON h.id = ha.hotel_id
        WHERE ha.user_id = $1
-       ORDER BY h.created_at ASC
+       ORDER BY CASE WHEN h.id = $2 THEN 0 ELSE 1 END, h.created_at ASC
        LIMIT 1`,
-      [req.user.id],
+      [req.user.id, req.hotel?.id || null],
     )
     hotelAdminHotel = rows[0] || null
   }

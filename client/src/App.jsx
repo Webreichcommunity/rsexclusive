@@ -66,7 +66,7 @@ function RequireConsoleAuth({ children, mode }) {
   const user = appUser.data?.user
   const isStaff = user?.role === 'hotel_admin' || user?.role === 'super_admin'
   const isSuperAdminRoute = appPath.startsWith('/super-admin')
-  const hotelAdminPath = user?.hotel ? buildTenantPath('/admin', { isTenant: true, key: user.hotel.slug || user.hotel.subdomain, source: 'path' }) : buildTenantPath('/admin', mode)
+  const hotelAdminPath = user?.hotel ? buildTenantPath('/admin', { isTenant: true, key: user.hotel.subdomain || user.hotel.slug, source: 'path' }) : buildTenantPath('/admin', mode)
   const targetPath = user?.role === 'super_admin' ? '/super-admin' : hotelAdminPath
 
   useEffect(() => {
