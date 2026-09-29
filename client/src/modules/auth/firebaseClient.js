@@ -48,12 +48,12 @@ export async function observeAuth(callback) {
   })
 }
 
-export async function loginWithEmail(email, password, options = {}) {
+export async function loginWithEmail(email, password) {
   const auth = await loadFirebase()
   if (!auth) throw new Error('Firebase web config is not set')
-  const { browserLocalPersistence, browserSessionPersistence, setPersistence, signInWithEmailAndPassword } = await import('firebase/auth')
+  const { browserLocalPersistence, setPersistence, signInWithEmailAndPassword } = await import('firebase/auth')
   try {
-    await setPersistence(auth, options.persistence === 'session' ? browserSessionPersistence : browserLocalPersistence)
+    await setPersistence(auth, browserLocalPersistence)
     const credential = await signInWithEmailAndPassword(auth, email, password)
     currentUser = credential.user
     return credential
