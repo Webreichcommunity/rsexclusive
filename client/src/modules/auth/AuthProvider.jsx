@@ -9,7 +9,13 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let active = true
     let cleanup = () => {}
+    const clearAuth = () => {
+      if (!active) return
+      setFirebaseUser(null)
+      setLoading(false)
+    }
 
+    window.addEventListener('rs-exclusive-auth-cleared', clearAuth)
     observeAuth((user) => {
       if (!active) return
       setFirebaseUser(user)
@@ -25,6 +31,7 @@ export function AuthProvider({ children }) {
 
     return () => {
       active = false
+      window.removeEventListener('rs-exclusive-auth-cleared', clearAuth)
       cleanup()
     }
   }, [])

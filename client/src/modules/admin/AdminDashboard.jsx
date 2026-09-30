@@ -64,6 +64,9 @@ const profileOptions = [
   { avatar: 'avatar-transgender', gender: 'transgender', Icon: Accessibility },
 ]
 
+const liveBookingRefreshMs = 15_000
+const liveBookingRefreshScopes = ['dashboard', 'bookings', 'rooms', 'inventory']
+
 const emptyRoom = {
   id: '',
   name: '',
@@ -213,13 +216,17 @@ export function AdminDashboard() {
     `${refreshKeys.rates}:rate-summary:${rateSummaryRoomId}`,
   )
 
-  function refresh(message, type = 'success', scopes = ['dashboard']) {
-    setNotice({ type, message })
+  function bumpRefreshScopes(scopes) {
     setRefreshKeys((current) => {
       const next = { ...current }
       for (const scope of scopes) next[scope] = (next[scope] || 0) + 1
       return next
     })
+  }
+
+  function refresh(message, type = 'success', scopes = ['dashboard']) {
+    setNotice({ type, message })
+    bumpRefreshScopes(scopes)
   }
 
   function startRoomEdit(room) {
@@ -822,7 +829,20 @@ export function AdminDashboard() {
     setRateSummaryRoomId((value) => value || firstRoomId)
   }, [firstRoomId])
 
-  if (dashboard.loading) return <LoadingState label="Loading hotel operations" />
+  useEffect(() => {
+    const refreshLiveBookingData = () => {
+      if (document.visibilityState !== 'visible') return
+      bumpRefreshScopes(liveBookingRefreshScopes)
+    }
+    const timer = window.setInterval(refreshLiveBookingData, liveBookingRefreshMs)
+    document.addEventListener('visibilitychange', refreshLiveBookingData)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshLiveBookingData)
+    }
+  }, [])
+
+  if (dashboard.loading && !dashboard.data) return <LoadingState label="Loading hotel operations" />
 
   const navCounts = {
     summary: 'Live',

@@ -6,6 +6,15 @@ const PUBLIC_GET_CACHE_MS = 30_000
 const getCache = new Map()
 const inFlightGets = new Map()
 
+export function clearApiClientCache() {
+  getCache.clear()
+  inFlightGets.clear()
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('rs-exclusive-auth-cleared', clearApiClientCache)
+}
+
 export function publicApiUrl(path) {
   const base = new URL(API_BASE_URL, window.location.origin)
   return new URL(path.startsWith('/') ? path : `/${path}`, `${base.origin}/`).toString()

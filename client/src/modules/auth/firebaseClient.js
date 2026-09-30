@@ -70,6 +70,11 @@ export function clearConsoleSessionState() {
   }
 }
 
+function notifyAuthCleared() {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('rs-exclusive-auth-cleared'))
+}
+
 function authActionSettings() {
   return {
     url: `${window.location.origin}${window.location.pathname}${window.location.search}`,
@@ -138,11 +143,15 @@ export async function sendPasswordReset(email) {
 }
 
 export async function logout() {
+  currentUser = null
+  clearConsoleSessionState()
+  notifyAuthCleared()
   const auth = await loadFirebase()
   const { signOut } = await import('firebase/auth')
   if (auth) await signOut(auth)
   currentUser = null
   clearConsoleSessionState()
+  notifyAuthCleared()
 }
 
 async function waitForAuthReady(auth) {
