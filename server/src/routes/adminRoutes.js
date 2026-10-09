@@ -56,6 +56,11 @@ const roomTypeSchema = z.object({
     physicalRooms: z.coerce.number().int().positive().default(1),
     occupancyAdults: z.coerce.number().int().positive(),
     occupancyChildren: z.coerce.number().int().min(0).default(0),
+    extraBed: z.object({
+      enabled: z.coerce.boolean().default(false),
+      price: z.coerce.number().nonnegative().default(0),
+      preselected: z.coerce.boolean().default(true),
+    }).optional(),
   })).optional(),
 })
 
@@ -208,6 +213,15 @@ function normalizeRateOptions(body) {
       physicalRooms: Number(item.physicalRooms || 1),
       occupancyAdults: Number(item.occupancyAdults || (category === 'single' ? 1 : 2)),
       occupancyChildren: Number(item.occupancyChildren || 0),
+      ...(category === 'double' && item.extraBed?.enabled
+        ? {
+            extraBed: {
+              enabled: true,
+              price: Number(item.extraBed.price || 0),
+              preselected: true,
+            },
+          }
+        : {}),
     }
   }
   if (Object.keys(options).length) return options

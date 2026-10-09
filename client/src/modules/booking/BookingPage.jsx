@@ -18,6 +18,7 @@ const fallbackRoomImage = 'https://images.unsplash.com/photo-1590490360182-c33d5
 const PARTIAL_PAYMENT_PERCENT = 25
 const FIXED_TAX_RATE = 5
 const TERMS_VERSION = '2026-09-20'
+const EXTRA_BED_VIRTUAL_AMENITY_ID = '00000000-0000-0000-0000-000000000003'
 const bookingAuthDraftKey = 'rs-exclusive-booking-auth-return'
 const bookingAuthDraftMaxAgeMs = 60 * 60 * 1000
 const termsAndConditions = [
@@ -257,10 +258,16 @@ export function BookingPage() {
   }, [allRoomOffers, data, form, selectedOfferId, selectedRoomId, step, syncUrl])
 
   useEffect(() => {
-    if (!priceRoom || !selectedAmenityIds.length) return
+    if (!priceRoom) return
     const validIds = new Set(getAddOnAmenityItems(priceRoom, bookableAmenities, form.adults).map((amenity) => amenity.id).filter(Boolean))
-    const nextSelected = selectedAmenityIds.filter((id) => validIds.has(id))
-    if (nextSelected.length !== selectedAmenityIds.length) setSelectedAmenityIds(nextSelected)
+    const nextSelected = withMandatoryExtraBedAmenity(
+      selectedAmenityIds.filter((id) => validIds.has(id)),
+      [priceRoom],
+      bookableAmenities,
+      priceRoom.id,
+      form.adults,
+    )
+    if (nextSelected.join('|') !== selectedAmenityIds.join('|')) setSelectedAmenityIds(nextSelected)
   }, [priceRoom, bookableAmenities, selectedAmenityIds, form.adults])
 
   useEffect(() => {
@@ -353,6 +360,10 @@ export function BookingPage() {
 
   function toggleAmenity(amenityId) {
     if (!amenityId) return
+    if (selectedAmenityIds.includes(amenityId) && isMandatoryExtraBedAmenityId(amenityId, priceRoom, bookableAmenities, form.adults)) {
+      showGuideToast('Extra bed required', 'For 3 adults, the extra bed is required and its charge is included in the booking total.', 'info')
+      return
+    }
     const nextAmenityIds = selectedAmenityIds.includes(amenityId)
       ? selectedAmenityIds.filter((id) => id !== amenityId)
       : [...selectedAmenityIds, amenityId]
@@ -385,8 +396,8 @@ export function BookingPage() {
       const selectedStillAvailable = payload.rooms.some((room) => room.id === preferredRoomId)
       const firstRoom = payload.rooms[0]
       const nextRoomId = selectedStillAvailable ? preferredRoomId : firstRoom?.id || ''
-      const nextAmenityIds = withRequiredExtraBedAmenity(selectedAmenityIds, payload.rooms, bookableAmenities, nextRoomId, searchForm.adults)
-      if (nextAmenityIds.length !== selectedAmenityIds.length) setSelectedAmenityIds(nextAmenityIds)
+      const nextAmenityIds = withMandatoryExtraBedAmenity(selectedAmenityIds, payload.rooms, bookableAmenities, nextRoomId, searchForm.adults)
+      if (nextAmenityIds.join('|') !== selectedAmenityIds.join('|')) setSelectedAmenityIds(nextAmenityIds)
       setSelectedRoomId(nextRoomId)
       syncUrl(searchForm, nextRoomId, { step: preservedStep, amenityIds: nextAmenityIds })
       setStatus({ loading: false, error: payload.rooms.length || options.silent ? '' : 'No rooms are available for those dates. Try another date range.', paymentError: '' })
@@ -752,7 +763,7 @@ export function BookingPage() {
             {roomsForDisplay.length ? (
               <Stagger className="grid gap-4">
                 {roomsForDisplay.map((room) => (
-                  <RoomCard key={room.id} room={room} adults={form.adults} searched={searched} selected={room.id === selectedRoomId} loading={status.loading} offers={offersForRoom(offers, room.id)} selectedOfferId={selectedOfferId} offer={offerAppliesToRoom(selectedOfferForRoom, room.id) ? selectedOfferForRoom : null} nights={nights} roomsCount={form.roomsCount} onSelectOffer={chooseOffer} onDetails={() => openDetails(room)} onBook={() => selectRoom(room)} />
+                  <RoomCard key={room.id} room={room} adults={form.adults} amenities={bookableAmenities} searched={searched} selected={room.id === selectedRoomId} loading={status.loading} offers={offersForRoom(offers, room.id)} selectedOfferId={selectedOfferId} offer={offerAppliesToRoom(selectedOfferForRoom, room.id) ? selectedOfferForRoom : null} nights={nights} roomsCount={form.roomsCount} onSelectOffer={chooseOffer} onDetails={() => openDetails(room)} onBook={() => selectRoom(room)} />
                 ))}
               </Stagger>
             ) : (
@@ -879,19 +890,21 @@ function OfferChoiceCard({ offer, selected, onSelect, compact = false }) {
   )
 }
 
-function RoomCard({ room, adults, searched, selected, loading, offers, selectedOfferId, offer, nights, roomsCount, onSelectOffer, onDetails, onBook }) {
+function RoomCard({ room, adults, amenities, searched, selected, loading, offers, selectedOfferId, offer, nights, roomsCount, onSelectOffer, onDetails, onBook }) {
   const [descriptionOpen, setDescriptionOpen] = useState(false)
   const displayRoom = getDisplayRoomForGuests(room, adults)
   const unavailable = searched && Number(room.available_rooms || 0) < 1
   const extraBedCount = Number(displayRoom.extra_bed_count || 0)
   const displayPrice = displayRoom.offer_price || displayRoom.base_price
   const staySubtotal = Number(displayRoom.subtotal || Number(displayPrice || 0) * Math.max(nights, 1)) * Number(roomsCount || 1)
-  const cardDiscount = calculateOfferDiscount(offer, staySubtotal)
-  const discountedStayTotal = Math.max(0, roundMoney(staySubtotal - cardDiscount))
+  const extraBedTotal = getMandatoryExtraBedTotal(displayRoom, adults, roomsCount, amenities)
+  const cardGrossSubtotal = roundMoney(staySubtotal + extraBedTotal)
+  const cardDiscount = calculateOfferDiscount(offer, cardGrossSubtotal)
+  const discountedStayTotal = Math.max(0, roundMoney(cardGrossSubtotal - cardDiscount))
   const roomPriceSaving = displayRoom.offer_price ? Math.max(0, Number(displayRoom.base_price || 0) - Number(displayRoom.offer_price || 0)) : 0
   const stayNights = Math.max(nights, 1)
   const roomUnits = Number(roomsCount || 1)
-  const bestNightPrice = roundMoney((offer ? discountedStayTotal : staySubtotal) / stayNights / roomUnits)
+  const bestNightPrice = roundMoney((offer ? discountedStayTotal : cardGrossSubtotal) / stayNights / roomUnits)
   const compareNightPrice = displayRoom.offer_price ? Number(displayRoom.base_price || 0) : Number(displayPrice || 0)
   const offerNightSaving = offer ? Math.max(0, roundMoney(Number(displayPrice || 0) - bestNightPrice)) : 0
   const offerVisual = offer ? getOfferVisual(offer) : null
@@ -923,7 +936,7 @@ function RoomCard({ room, adults, searched, selected, loading, offers, selectedO
         </div>
         {extraBedCount ? (
           <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-extrabold leading-5 text-amber-950">
-            Extra bed will be added for {extraBedCount} extra adult{extraBedCount === 1 ? '' : 's'}.
+            3-adult price includes the required extra-person charge{extraBedTotal ? ` of Rs ${extraBedTotal.toLocaleString('en-IN')}` : ''}.
           </p>
         ) : null}
       </div>
@@ -934,7 +947,7 @@ function RoomCard({ room, adults, searched, selected, loading, offers, selectedO
             <div>
               {compareNightPrice > bestNightPrice ? <p className="text-xs font-bold text-stone-500 line-through sm:text-sm">Rs {compareNightPrice.toLocaleString('en-IN')}</p> : null}
               <p className="mt-1 text-2xl font-black leading-none text-emerald-800 sm:text-3xl">Rs {bestNightPrice.toLocaleString('en-IN')}</p>
-              <p className="mt-1 text-xs font-bold text-stone-500">per night</p>
+              <p className="mt-1 text-xs font-bold text-stone-500">per night{extraBedTotal ? ' with extra bed' : ''}</p>
             </div>
             {roomPriceSaving ? <p className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-black text-emerald-800 md:mt-2">Save Rs {roomPriceSaving.toLocaleString('en-IN')}</p> : null}
           </div>
@@ -1123,6 +1136,7 @@ function BookingReviewPage({
   setTermsAccepted,
 }) {
   const roomAmenities = getAddOnAmenityItems(priceRoom, data.amenities || [], form.adults)
+  const requiredExtraBed = selectedAmenityItems.find((amenity) => isMandatoryExtraBedAmenity(amenity, priceRoom, form.adults))
   const [breakdownOpen, setBreakdownOpen] = useState(false)
   const [termsOpen, setTermsOpen] = useState(false)
   const tenantMode = resolveTenantFromLocation()
@@ -1157,7 +1171,7 @@ function BookingReviewPage({
               </div>
               {Number(priceRoom?.extra_bed_count || 0) ? (
                 <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-extrabold leading-6 text-amber-950">
-                  Extra bed added for {Number(priceRoom.extra_bed_count)} extra adult{Number(priceRoom.extra_bed_count) === 1 ? '' : 's'}.
+                  3-adult booking includes a mandatory extra-person charge{requiredExtraBed ? ` of Rs ${(Number(requiredExtraBed.price || 0) * Number(form.roomsCount || 1)).toLocaleString('en-IN')}` : ''}. This amount is payable whether or not the extra bed is used.
                 </p>
               ) : null}
               {roomAmenities.length ? (
@@ -1171,7 +1185,13 @@ function BookingReviewPage({
                   </div>
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
                     {roomAmenities.map((amenity) => (
-                      <AmenityOption key={amenity.id || amenity.name} amenity={amenity} selected={selectedAmenityItems.some((item) => item.id === amenity.id)} onToggle={() => onToggleAmenity(amenity.id)} />
+                      <AmenityOption
+                        key={amenity.id || amenity.name}
+                        amenity={amenity}
+                        selected={selectedAmenityItems.some((item) => item.id === amenity.id)}
+                        locked={isMandatoryExtraBedAmenity(amenity, priceRoom, form.adults)}
+                        onToggle={() => onToggleAmenity(amenity.id)}
+                      />
                     ))}
                   </div>
                 </div>
@@ -1203,7 +1223,7 @@ function BookingReviewPage({
                 <Line label="Dates" value={`${form.checkIn} to ${form.checkOut}`} />
                 <Line label="Guests" value={`${form.adults} adults, ${form.children} children`} />
                 <Line label="Rooms" value={form.roomsCount} />
-                <Line label="Selected add-ons" value={selectedAmenityItems.length ? `Rs ${amenitySubtotal.toLocaleString('en-IN')}` : 'None'} />
+                <Line label={requiredExtraBed ? 'Required extra-person/add-ons' : 'Selected add-ons'} value={selectedAmenityItems.length ? `Rs ${amenitySubtotal.toLocaleString('en-IN')}` : 'None'} />
               </div>
               <button
                 type="button"
@@ -1219,9 +1239,9 @@ function BookingReviewPage({
                   <Line label="Nights" value={nights > 0 ? nights : 'Check dates'} />
                   <Line label="Room price" value={priceRoom ? `Rs ${Number(priceRoom.offer_price || priceRoom.base_price).toLocaleString('en-IN')}/night` : '-'} />
                   <Line label="Room subtotal" value={`Rs ${roomSubtotal.toLocaleString('en-IN')}`} />
-                  {selectedAmenityItems.length ? <Line label="Selected amenities" value={`Rs ${amenitySubtotal.toLocaleString('en-IN')}`} /> : null}
+                  {selectedAmenityItems.length ? <Line label={requiredExtraBed ? 'Required add-ons total' : 'Selected amenities'} value={`Rs ${amenitySubtotal.toLocaleString('en-IN')}`} /> : null}
                   {selectedAmenityItems.map((amenity) => (
-                    <Line key={amenity.id} label={amenity.name} value={`Rs ${(Number(amenity.price || 0) * Number(form.roomsCount || 1)).toLocaleString('en-IN')}`} />
+                    <Line key={amenity.id} label={isMandatoryExtraBedAmenity(amenity, priceRoom, form.adults) ? `${amenity.name} (required for 3 adults)` : amenity.name} value={`Rs ${(Number(amenity.price || 0) * Number(form.roomsCount || 1)).toLocaleString('en-IN')}`} />
                   ))}
                   <Line label="Stay subtotal" value={`Rs ${grossSubtotal.toLocaleString('en-IN')}`} />
                   {selectedOffer ? <Line label={selectedOffer.title} value={`- Rs ${offerDiscount.toLocaleString('en-IN')}`} /> : null}
@@ -1475,19 +1495,19 @@ function MilestoneOfferControl({ rewards = {}, discount, selected, subtotalBefor
   )
 }
 
-function AmenityOption({ amenity, selected, onToggle }) {
-  const disabled = !amenity.id
+function AmenityOption({ amenity, selected, locked = false, onToggle }) {
+  const disabled = !amenity.id || locked
   const [open, setOpen] = useState(false)
   const hasDescription = Boolean(String(amenity.description || '').trim())
   return (
-    <div className={`rounded-lg border p-3 transition duration-300 hover:-translate-y-0.5 hover:shadow-card ${selected ? 'border-amberline bg-amber-50 ring-2 ring-amberline/15' : 'border-mist bg-white'} ${disabled ? 'opacity-70' : ''}`}>
+    <div className={`rounded-lg border p-3 transition duration-300 hover:-translate-y-0.5 hover:shadow-card ${selected ? 'border-amberline bg-amber-50 ring-2 ring-amberline/15' : 'border-mist bg-white'} ${!amenity.id ? 'opacity-70' : ''}`}>
       <div className="flex items-start gap-3">
         <button
           type="button"
-          onClick={onToggle}
+          onClick={locked ? undefined : onToggle}
           disabled={disabled}
           className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md border ${selected ? 'border-amberline bg-amberline text-white' : 'border-stone-300 bg-white text-stone-300'} disabled:cursor-not-allowed`}
-          aria-label={selected ? `Remove ${amenity.name}` : `Select ${amenity.name}`}
+          aria-label={locked ? `${amenity.name} is required` : selected ? `Remove ${amenity.name}` : `Select ${amenity.name}`}
         >
           <Check size={16} />
         </button>
@@ -1499,6 +1519,7 @@ function AmenityOption({ amenity, selected, onToggle }) {
             <p className="break-words text-sm font-extrabold text-charcoal">{amenity.name}</p>
             <span className="shrink-0 rounded-md bg-bone px-2 py-1 text-xs font-black text-amberline">{Number(amenity.price || 0) ? `Rs ${Number(amenity.price).toLocaleString('en-IN')}` : 'Included'}</span>
           </div>
+          {locked ? <p className="mt-1 text-xs font-black uppercase tracking-[0.1em] text-emerald-700">Required for 3 adults</p> : null}
           {hasDescription ? (
             <button type="button" className="mt-1 text-xs font-black text-[#7f1d1d] underline-offset-4 hover:underline" onClick={() => setOpen((current) => !current)}>
               {open ? 'Show less' : 'Read more'}
@@ -1600,7 +1621,7 @@ function RoomDetails({ room, hotel, form, nights, amenities, offers, selectedOff
             ) : null}
             {Number(room.extra_bed_count || 0) ? (
               <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-extrabold leading-6 text-amber-950">
-                Extra bed will be added automatically for {Number(room.extra_bed_count)} extra adult{Number(room.extra_bed_count) === 1 ? '' : 's'}.
+                This room is enabled for 3 adults with {Number(room.extra_bed_count)} required extra bed{Number(room.extra_bed_count) === 1 ? '' : 's'}. The extra-person charge is included in the booking total and applies whether or not the bed is used.
               </p>
             ) : null}
             <div className="mt-6 flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
@@ -1613,7 +1634,13 @@ function RoomDetails({ room, hotel, form, nights, amenities, offers, selectedOff
             {addOnAmenities.length ? (
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 {addOnAmenities.map((amenity) => (
-                  <AmenityOption key={amenity.id || amenity.name} amenity={amenity} selected={selectedAmenityIds.includes(amenity.id)} onToggle={() => onToggleAmenity(amenity.id)} />
+                  <AmenityOption
+                    key={amenity.id || amenity.name}
+                    amenity={amenity}
+                    selected={selectedAmenityIds.includes(amenity.id)}
+                    locked={isMandatoryExtraBedAmenity(amenity, room, form.adults)}
+                    onToggle={() => onToggleAmenity(amenity.id)}
+                  />
                 ))}
               </div>
             ) : (
@@ -1739,6 +1766,7 @@ function getRoomAmenityItems(room) {
 }
 
 function splitAmenityItems(room, hotelAmenities = [], adults = 1) {
+  const displayRoom = getDisplayRoomForGuests(room, adults) || room
   const hotelItems = (hotelAmenities || [])
     .filter((amenity) => amenity?.name)
     .map((amenity) => ({
@@ -1752,7 +1780,16 @@ function splitAmenityItems(room, hotelAmenities = [], adults = 1) {
   const hotelByName = new Map(hotelItems.map((amenity) => [String(amenity.name || '').toLowerCase(), amenity]))
   const roomItems = getRoomAmenityItems(room).map((amenity) => {
     const catalogAmenity = (amenity.id && hotelById.get(amenity.id)) || hotelByName.get(String(amenity.name || '').toLowerCase())
-    return catalogAmenity ? { ...catalogAmenity, ...amenity, icon: catalogAmenity.icon || amenity.icon, description: catalogAmenity.description || amenity.description } : amenity
+    return catalogAmenity
+      ? {
+          ...amenity,
+          ...catalogAmenity,
+          name: amenity.name || catalogAmenity.name,
+          description: catalogAmenity.description || amenity.description || '',
+          icon: catalogAmenity.icon || amenity.icon || 'sparkles',
+          price: Number(catalogAmenity.price ?? amenity.price ?? 0),
+        }
+      : amenity
   })
   const included = []
   const addOns = []
@@ -1760,34 +1797,40 @@ function splitAmenityItems(room, hotelAmenities = [], adults = 1) {
   const addOnKeys = new Set()
 
   for (const amenity of roomItems) {
-    const key = amenity.id || amenity.name
-    if (Number(amenity.price || 0) > 0) {
+    if (isExtraBedAmenity(amenity) && !shouldShowExtraBedAmenity(displayRoom, adults)) continue
+    const effectiveAmenity = withRoomExtraBedPrice(amenity, displayRoom)
+    const key = effectiveAmenity.id || effectiveAmenity.name
+    if (Number(effectiveAmenity.price || 0) > 0) {
       if (!addOnKeys.has(key)) {
         addOnKeys.add(key)
-        addOns.push(amenity)
+        addOns.push(effectiveAmenity)
       }
       continue
     }
     if (!includedKeys.has(key)) {
       includedKeys.add(key)
-      included.push(amenity)
+      included.push(effectiveAmenity)
     }
   }
 
   for (const amenity of hotelItems) {
-    if (isExtraBedAmenity(amenity) && Number(adults || 1) !== 3) continue
-    const key = amenity.id || amenity.name
-    if (Number(amenity.price || 0) <= 0) {
+    if (isExtraBedAmenity(amenity) && !shouldShowExtraBedAmenity(displayRoom, adults)) continue
+    const effectiveAmenity = withRoomExtraBedPrice(amenity, displayRoom)
+    const key = effectiveAmenity.id || effectiveAmenity.name
+    if (Number(effectiveAmenity.price || 0) <= 0) {
       if (!includedKeys.has(key)) {
         includedKeys.add(key)
-        included.push(amenity)
+        included.push(effectiveAmenity)
       }
       continue
     }
     if (!addOnKeys.has(key)) {
       addOnKeys.add(key)
-      addOns.push(amenity)
+      addOns.push(effectiveAmenity)
     }
+  }
+  if (shouldShowExtraBedAmenity(displayRoom, adults) && !addOns.some((amenity) => isExtraBedAmenity(amenity))) {
+    addOns.push(getVirtualExtraBedAmenity(displayRoom))
   }
 
   return { included, addOns }
@@ -1808,14 +1851,24 @@ function getDisplayRoomForGuests(room, adults = 1) {
   const category = Number(adults || 1) <= 1 && rates.single ? 'single' : Number(adults || 1) <= 1 && rates.double ? 'double' : rates.double ? 'double' : ''
   const rate = category ? rates[category] : null
   if (!rate) return room
+  const occupancyAdults = rate.occupancyAdults ?? room.occupancy_adults
+  const extraBedEnabled = Boolean(rate.extraBed?.enabled)
+  const extraBedCount = extraBedEnabled && Number(adults || 1) > Number(occupancyAdults || 0)
+    ? Math.max(0, Number(adults || 1) - Number(occupancyAdults || 0))
+    : Number(room.extra_bed_count || 0)
   return {
     ...room,
-    occupancy_adults: rate.occupancyAdults ?? room.occupancy_adults,
+    occupancy_adults: occupancyAdults,
     occupancy_children: rate.occupancyChildren ?? room.occupancy_children,
     base_price: rate.basePrice ?? room.base_price,
     offer_price: rate.offerPrice ?? null,
     size_sqft: rate.sizeSqft ?? room.size_sqft,
     selected_rate_category: category,
+    extra_bed_count: extraBedCount,
+    extra_bed_recommended: extraBedCount > 0,
+    extra_bed_available: extraBedEnabled,
+    extra_bed_preselected: rate.extraBed?.preselected ?? room.extra_bed_preselected ?? true,
+    extra_bed_price: rate.extraBed?.price ?? room.extra_bed_price ?? 0,
   }
 }
 
@@ -1830,7 +1883,7 @@ function roomSupportsGuestIntent(room, adults = 1, children = 0) {
   if (!candidate) return requestedAdults <= 1 && Number(room.occupancy_adults || 0) >= requestedAdults && Number(room.occupancy_children || 0) >= requestedChildren
   const adultsCapacity = Number(candidate.occupancyAdults ?? room.occupancy_adults ?? 0)
   const childrenCapacity = Number(candidate.occupancyChildren ?? room.occupancy_children ?? 0)
-  const extraAdultCapacity = requestedAdults >= 3 ? 1 : 0
+  const extraAdultCapacity = requestedAdults >= 3 && candidate.extraBed?.enabled ? 1 : 0
   return adultsCapacity + extraAdultCapacity >= requestedAdults && childrenCapacity >= requestedChildren
 }
 
@@ -1856,19 +1909,63 @@ function isUrl(value) {
 }
 
 function findExtraBedAmenity(amenities = []) {
-  return amenities.find((amenity) => isExtraBedAmenity(amenity))
+  return amenities
+    .filter((amenity) => isExtraBedAmenity(amenity))
+    .sort((left, right) => Number(left.price || 0) - Number(right.price || 0) || String(left.name || '').localeCompare(String(right.name || '')))[0]
+}
+
+function getExtraBedAmenity(amenities = [], room = {}) {
+  const amenity = findExtraBedAmenity(amenities)
+  return amenity ? withRoomExtraBedPrice(amenity, room) : getVirtualExtraBedAmenity(room)
+}
+
+function getVirtualExtraBedAmenity(room = {}) {
+  return {
+    id: EXTRA_BED_VIRTUAL_AMENITY_ID,
+    name: 'Extra bed',
+    description: 'Prepared for a 3-adult stay in this room.',
+    price: Number(room?.extra_bed_price || 0),
+    icon: 'bed',
+  }
 }
 
 function isExtraBedAmenity(amenity) {
   return /extra\s*bed|additional\s*bed|rollaway/i.test(String(amenity?.name || ''))
 }
 
-function withRequiredExtraBedAmenity(currentIds = [], rooms = [], amenities = [], selectedRoomId = '', adults = 1) {
+function withMandatoryExtraBedAmenity(currentIds = [], rooms = [], amenities = [], selectedRoomId = '', adults = 1) {
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) || rooms[0]
-  if (Number(adults || 1) !== 3 || Number(selectedRoom?.extra_bed_count || 0) <= 0) return currentIds
-  const amenity = findExtraBedAmenity(amenities)
+  if (!shouldShowExtraBedAmenity(selectedRoom, adults)) return currentIds
+  const amenity = getExtraBedAmenity(amenities, selectedRoom)
   if (!amenity?.id || currentIds.includes(amenity.id)) return currentIds
   return [...currentIds, amenity.id]
+}
+
+function shouldShowExtraBedAmenity(room, adults = 1) {
+  if (Number(adults || 1) !== 3) return false
+  if (Number(room?.extra_bed_count || 0) > 0) return true
+  const displayRoom = getDisplayRoomForGuests(room, adults)
+  return Number(displayRoom?.extra_bed_count || 0) > 0
+}
+
+function withRoomExtraBedPrice(amenity, room) {
+  if (!isExtraBedAmenity(amenity)) return amenity
+  if (amenity.id === EXTRA_BED_VIRTUAL_AMENITY_ID) return { ...amenity, price: Number(room?.extra_bed_price || 0) }
+  return { ...amenity, price: Number(amenity.price || 0) }
+}
+
+function isMandatoryExtraBedAmenity(amenity, room, adults = 1) {
+  return shouldShowExtraBedAmenity(room, adults) && isExtraBedAmenity(amenity)
+}
+
+function isMandatoryExtraBedAmenityId(amenityId, room, amenities = [], adults = 1) {
+  if (!shouldShowExtraBedAmenity(room, adults)) return false
+  return getExtraBedAmenity(amenities, room)?.id === amenityId
+}
+
+function getMandatoryExtraBedTotal(room, adults = 1, roomsCount = 1, amenities = []) {
+  if (!shouldShowExtraBedAmenity(room, adults)) return 0
+  return roundMoney(Number(getExtraBedAmenity(amenities, room)?.price || 0) * Number(roomsCount || 1))
 }
 
 function getRoomImages(room) {

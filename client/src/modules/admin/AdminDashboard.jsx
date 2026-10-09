@@ -74,7 +74,7 @@ const emptyRoom = {
   roomCategories: ['single'],
   rateOptions: {
     single: { basePrice: '', offerPrice: '', sizeSqft: '', physicalRooms: 1, occupancyAdults: 1, occupancyChildren: 2 },
-    double: { basePrice: '', offerPrice: '', sizeSqft: '', physicalRooms: 1, occupancyAdults: 2, occupancyChildren: 2 },
+    double: { basePrice: '', offerPrice: '', sizeSqft: '', physicalRooms: 1, occupancyAdults: 2, occupancyChildren: 2, extraBedEnabled: false, extraBedPrice: '' },
   },
   bedType: '',
   customAmenities: '',
@@ -1345,6 +1345,23 @@ function RateOptionEditor({ category, roomForm, setRoomForm }) {
         <Field label="Adults"><input className="input" type="number" min="1" value={option.occupancyAdults} onChange={(event) => update('occupancyAdults', event.target.value)} /></Field>
         <Field label="Children"><input className="input" type="number" min="0" value={option.occupancyChildren} onChange={(event) => update('occupancyChildren', event.target.value)} /></Field>
       </div>
+      {category === 'double' ? (
+        <div className="mt-4 rounded-md border border-amber-200 bg-white p-3">
+          <label className="flex min-h-11 items-start gap-3 text-sm font-bold text-charcoal">
+            <input className="mt-1" type="checkbox" checked={Boolean(option.extraBedEnabled)} onChange={(event) => update('extraBedEnabled', event.target.checked)} />
+            <span>
+              Show this room for 3 adults with extra bed
+              <span className="mt-1 block text-xs font-semibold leading-5 text-stone-500">When enabled, this room appears in 3-adult searches as 2 adults plus an extra bed.</span>
+            </span>
+          </label>
+          {option.extraBedEnabled ? (
+            <div className="mt-3">
+              <Field label="Fallback extra bed charge"><input className="input" type="number" min="0" value={option.extraBedPrice} onChange={(event) => update('extraBedPrice', event.target.value)} /></Field>
+              <p className="mt-2 text-xs font-semibold leading-5 text-stone-500">Checkout uses the active Extra Bed amenity price first. This fallback is used only if the amenity is not in the catalog.</p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -2389,6 +2406,7 @@ function RoomCard({ room, onEdit, onDelete, onToggleHomepage }) {
   const roomAmenities = amenityItems.length ? amenityItems : (room.amenities || []).map((name) => ({ name }))
   const rateOptions = normalizeRoomRateOptions(room)
   const visibleRates = Object.entries(rateOptions).filter(([, option]) => option.enabled)
+  const extraBedEnabled = Boolean(rateOptions.double?.extraBedEnabled)
   return (
     <article className="grid gap-4 rounded-md border border-mist bg-white p-3 shadow-sm lg:grid-cols-[180px_minmax(0,1fr)_220px] lg:items-center">
       <div className="relative h-36 overflow-hidden rounded-md bg-bone">
@@ -2404,6 +2422,7 @@ function RoomCard({ room, onEdit, onDelete, onToggleHomepage }) {
             <span className="rounded-md bg-bone px-2 py-1 text-xs font-black text-stone-600">Order {room.sort_order ?? 1000}</span>
             <StatusPill status={room.active ? 'active' : 'inactive'} />
             {room.show_on_homepage ? <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">Featured</span> : null}
+            {extraBedEnabled ? <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">3 adults</span> : null}
           </div>
         </div>
         <p className="mt-3 line-clamp-2 text-sm leading-6 text-stone-600">{room.description}</p>
@@ -3156,6 +3175,8 @@ function normalizeRoomRateOptions(room = {}) {
       physicalRooms: source.double?.physicalRooms ?? (fallbackCategory === 'double' ? fallback.physicalRooms : 1),
       occupancyAdults: source.double?.occupancyAdults ?? 2,
       occupancyChildren: source.double?.occupancyChildren ?? (fallbackCategory === 'double' ? fallback.occupancyChildren : 2),
+      extraBedEnabled: Boolean(source.double?.extraBed?.enabled || source.double?.extraBedEnabled),
+      extraBedPrice: source.double?.extraBed?.price ?? source.double?.extraBedPrice ?? '',
     },
   }
 }
@@ -3178,6 +3199,15 @@ function buildRateOptionsPayload(roomForm) {
       physicalRooms: Number(option.physicalRooms || 1),
       occupancyAdults: Number(option.occupancyAdults || (category === 'single' ? 1 : 2)),
       occupancyChildren: Number(option.occupancyChildren || 0),
+      ...(category === 'double' && option.extraBedEnabled
+        ? {
+            extraBed: {
+              enabled: true,
+              price: Number(option.extraBedPrice || 0),
+              preselected: true,
+            },
+          }
+        : {}),
     }
     return options
   }, {})

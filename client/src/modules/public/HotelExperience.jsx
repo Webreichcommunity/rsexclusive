@@ -26,6 +26,7 @@ import { ImageLightbox } from '../../components/ui/ImageLightbox.jsx'
 import { StayDateRangePicker } from '../../components/ui/StayDateRangePicker.jsx'
 import { useAsync } from '../../hooks/useAsync.js'
 import { apiFetch } from '../../services/apiClient.js'
+import { logoDisplayUrl } from '../../utils/logoUrl.js'
 import { buildTenantPath, resolveTenantFromLocation } from '../tenant/resolveTenant.js'
 
 const fallbackHotelImage = 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1800&q=80'
@@ -96,16 +97,20 @@ function buildHotelSeo(hotel = {}, image) {
   const canonical = slug ? `${primarySiteUrl}/${slug}` : primarySiteUrl
   const name = profile?.name || cleanHotelName(hotel.name)
   const title = profile?.title || `${name} | Best Hotel in Akola | Direct Booking`
-  const description = profile?.description || `${hotelSummary(hotel)} Book rooms directly at ${name}, Akola with live availability, offers, and secure payment.`
+  const hotelDescription = premiumHotelSummary(hotel)
+  const description = metaDescription(hotelDescription || profile?.description || `${name} hotel in Akola with direct room booking, live availability, offers, and secure payment.`)
   const keywords = profile?.keywords || `${name}, hotel in Akola, best hotel in Akola, Akola hotel rooms, direct hotel booking Akola`
   const address = profile?.address || normalizeStructuredAddress(hotel.address)
   const telephone = profile?.telephone || normalizePhone(hotel.contact?.phone)
+  const logo = hotelLogoUrl(hotel)
 
   return {
     title,
     description,
     keywords,
     canonical,
+    siteName: name,
+    favicon: logo,
     structuredData: {
       '@context': 'https://schema.org',
       '@type': 'Hotel',
@@ -115,6 +120,7 @@ function buildHotelSeo(hotel = {}, image) {
       description,
       url: canonical,
       image,
+      logo,
       telephone,
       priceRange: 'INR',
       address: {
@@ -194,13 +200,14 @@ export function HotelExperience() {
   const heroImage = heroImages[0] || hotel.hero_image_url || fallbackHotelImage
   const featuredRoom = rooms[0]
   const bookingUrl = withTenantQuery(`/book?checkIn=${search.checkIn}&checkOut=${search.checkOut}&adults=${search.adults}&children=${search.children}&roomsCount=${search.roomsCount}`)
-  const homepageRooms = rooms
+  const homepageRooms = rooms.filter((room) => roomSupportsGuestIntent(room, search.adults, search.children))
   const diningMediaImage = getMediaUrls([hotel.branding?.diningImage || hotel.branding?.diningImageUrl].filter(Boolean))[0] || diningImage
   const galleryImages = getMediaUrls(hotel.branding?.gallery).slice(0, 5)
   const visibleGalleryImages = galleryImages.length
     ? galleryImages
     : [heroImage, featuredRoom?.hero_image_url || fallbackRoomImage, rooms[1]?.hero_image_url || loungeImage, showcaseImages[0] || diningMediaImage]
   const seo = buildHotelSeo(hotel, heroImage)
+  const heroDescription = premiumHotelSummary(hotel)
 
   return (
     <main className="overflow-hidden bg-transparent">
@@ -210,6 +217,8 @@ export function HotelExperience() {
         keywords={seo.keywords}
         canonical={seo.canonical}
         image={heroImage}
+        favicon={seo.favicon}
+        siteName={seo.siteName}
         structuredData={seo.structuredData}
       />
 
@@ -220,11 +229,12 @@ export function HotelExperience() {
               {cleanHotelName(hotel.name)}
             </h1>
             <p className="mt-6 max-w-2xl text-base font-medium leading-8 text-white/88 md:text-lg">
-              {premiumHotelSummary(hotel)} Book direct with live rooms, real offers, and the option to secure your stay with only 25% payment now.
+              {heroDescription}
             </p>
+            <DirectPricePromise />
             <div className="mt-8 flex flex-wrap gap-3 text-sm font-semibold text-white/90">
-              <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-amberline/88 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><CalendarDays size={16} className="text-amber-100" /> 24 hours check-in</span>
-              <span className="inline-flex items-center gap-2 rounded-md border border-white/18 bg-zinc-900/70 px-4 py-3 text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl"><CreditCard size={16} className="text-amber-100" /> Pay only 25% now</span>
+              <HeroBenefit icon={CalendarDays} title="24-hour check-in" text="Live room availability" />
+              <HeroBenefit icon={CreditCard} title="25% secure hold" text="Pay balance at hotel" />
             </div>
           </FadeIn>
 
@@ -274,7 +284,7 @@ export function HotelExperience() {
           </div>
           {homepageRooms.length ? (
             <Stagger className="grid gap-4">
-              {homepageRooms.map((room) => <RoomShowcase key={room.id} room={room} bookingUrl={bookingUrl} offers={offersForRoom(bookingOffers, room.id)} />)}
+              {homepageRooms.map((room) => <RoomShowcase key={room.id} room={room} bookingUrl={bookingUrl} adults={search.adults} amenities={amenities} offers={offersForRoom(bookingOffers, room.id)} />)}
             </Stagger>
           ) : (
             <FadeIn className="panel p-8 text-center">
@@ -316,15 +326,15 @@ export function HotelExperience() {
         </section>
 
         <section id="amenities" className="container-page section-pad">
-          <div className="page-heading">
+          <div className="page-heading !mb-5">
             <div>
               <p className="eyebrow">Experience and amenities</p>
-              <h2 className="page-title">Everything guests notice after check-in</h2>
+              <h2 className="page-title max-w-3xl">Everything guests notice after check-in</h2>
             </div>
           </div>
-          <AutoScrollRow ariaLabel="Hotel amenities" step={260}>
-            {(amenities.length ? amenities : fallbackAmenities).slice(0, 12).map((amenity) => <AmenityCard key={amenity.id || amenity.name} amenity={amenity} />)}
-          </AutoScrollRow>
+          <Stagger className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {(amenities.length ? amenities : fallbackAmenities).slice(0, 8).map((amenity) => <AmenityCard key={amenity.id || amenity.name} amenity={amenity} />)}
+          </Stagger>
         </section>
 
         <section id="gallery" className="container-page pb-16 md:pb-24">
@@ -360,6 +370,56 @@ function premiumHotelSummary(hotel) {
     return `${cleanHotelName(hotel?.name)} brings direct booking, composed rooms, attentive guest care, and a polished Akola hospitality experience.`
   }
   return raw
+}
+
+function metaDescription(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (text.length <= 160) return text
+  return `${text.slice(0, 157).replace(/\s+\S*$/, '')}...`
+}
+
+function hotelLogoUrl(hotel) {
+  return logoDisplayUrl(hotel?.branding?.logoUrl || '')
+}
+
+function DirectPricePromise() {
+  return (
+    <motion.div
+      className="group relative mt-7 max-w-2xl overflow-hidden rounded-lg border border-amber-200/40 bg-[linear-gradient(135deg,rgba(255,255,255,0.18),rgba(12,10,9,0.46))] p-1 shadow-[0_24px_70px_rgba(0,0,0,0.42)] backdrop-blur-2xl"
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.55, delay: 0.12 }}
+    >
+      <motion.span
+        className="pointer-events-none absolute inset-y-0 -left-1/2 w-1/2 bg-[linear-gradient(100deg,transparent,rgba(255,255,255,0.34),transparent)]"
+        animate={{ x: ['0%', '330%'] }}
+        transition={{ duration: 3.1, repeat: Infinity, repeatDelay: 1.2, ease: 'easeInOut' }}
+      />
+      <div className="relative grid gap-4 rounded-md border border-white/16 bg-zinc-950/40 p-4 sm:grid-cols-[1fr_auto] sm:items-center sm:p-5">
+        <span className="min-w-0">
+          <span className="block text-xs font-black uppercase tracking-[0.16em] text-amber-100">Direct booking promise</span>
+          <span className="mt-1 block text-xl font-black leading-tight text-white sm:text-2xl">Best price when you book direct</span>
+          <span className="mt-1 block text-sm font-semibold leading-6 text-white/78">Compare with OTAs before paying. Live rooms, real offers, and hotel-confirmed booking in one place.</span>
+        </span>
+        <span className="grid grid-cols-2 overflow-hidden rounded-md border border-white/16 bg-white/10 text-center text-xs font-black uppercase text-white sm:w-32 sm:grid-cols-1">
+          <span className="px-3 py-2 text-emerald-100">Official site</span>
+          <span className="border-l border-white/12 px-3 py-2 text-white/58 line-through sm:border-l-0 sm:border-t">OTA markup</span>
+        </span>
+      </div>
+    </motion.div>
+  )
+}
+
+function HeroBenefit({ icon: Icon, title, text, tone = 'dark' }) {
+  return (
+    <span className={`inline-flex w-full items-center gap-3 rounded-md border border-white/18 px-4 py-3 text-left text-white shadow-[0_14px_38px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:w-auto ${tone === 'gold' ? 'bg-amberline/90' : 'bg-zinc-900/72'}`}>
+      <Icon size={17} className="shrink-0 text-amber-100" />
+      <span className="min-w-0">
+        <span className="block text-sm font-black leading-5">{title}</span>
+        <span className="block text-xs font-bold leading-5 text-white/78">{text}</span>
+      </span>
+    </span>
+  )
 }
 
 function OfferShowcase({ offers, hasRoomSpecificOffers = false, bookingUrl, showingShowcase = false, onViewOffers }) {
@@ -595,10 +655,12 @@ function ImageSlideshow({ images, alt }) {
   )
 }
 
-function RoomShowcase({ room, bookingUrl, offers = [] }) {
+function RoomShowcase({ room, bookingUrl, adults = 1, amenities = [], offers = [] }) {
   const [descriptionOpen, setDescriptionOpen] = useState(false)
-  const displayRoom = getDisplayRoomForGuests(room, 1)
+  const displayRoom = getDisplayRoomForGuests(room, adults)
   const displayPrice = displayRoom.offer_price || displayRoom.base_price
+  const extraBedPrice = getMandatoryExtraBedTotal(displayRoom, adults, 1, amenities)
+  const displayPriceWithExtraBed = Number(displayPrice || 0) + extraBedPrice
   const availabilityUrl = `${bookingUrl}&roomTypeId=${room.id}`
   const detailsUrl = `${availabilityUrl}&step=details`
   const roomPriceSaving = displayRoom.offer_price ? Math.max(0, Number(displayRoom.base_price || 0) - Number(displayRoom.offer_price || 0)) : 0
@@ -626,9 +688,10 @@ function RoomShowcase({ room, bookingUrl, offers = [] }) {
           <div className="grid grid-cols-[auto_1fr] items-start gap-3 xl:block">
             <span className="w-fit rounded-md bg-white px-3 py-2 text-xs font-bold text-stone-600 shadow-sm">{room.size_sqft || 'Spacious'} sq ft</span>
             <div className="min-w-0 text-right xl:mt-3 xl:text-left">
-              {displayRoom.offer_price ? <p className="text-xs font-bold text-stone-500 line-through sm:text-sm">Rs {Number(displayRoom.base_price).toLocaleString('en-IN')}</p> : null}
-              <p className="text-2xl font-black leading-none text-emerald-800 sm:text-3xl">Rs {Number(displayPrice).toLocaleString('en-IN')}</p>
-              <p className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">per night</p>
+              {displayRoom.offer_price ? <p className="text-xs font-bold text-stone-500 line-through sm:text-sm">Rs {(Number(displayRoom.base_price || 0) + extraBedPrice).toLocaleString('en-IN')}</p> : null}
+              <p className="text-2xl font-black leading-none text-emerald-800 sm:text-3xl">Rs {Number(displayPriceWithExtraBed).toLocaleString('en-IN')}</p>
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-700">per night{extraBedPrice ? ' with extra bed' : ''}</p>
+              {extraBedPrice ? <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-black leading-5 text-amber-900">Includes required extra-person charge Rs {extraBedPrice.toLocaleString('en-IN')}</p> : null}
               {roomPriceSaving ? <p className="mt-2 inline-flex rounded-md bg-white px-3 py-2 text-xs font-black text-emerald-800 shadow-sm">Save Rs {roomPriceSaving.toLocaleString('en-IN')}</p> : null}
             </div>
           </div>
@@ -795,29 +858,85 @@ function getDisplayRoomForGuests(room, adults = 1) {
   const category = Number(adults || 1) <= 1 && rates.single ? 'single' : Number(adults || 1) <= 1 && rates.double ? 'double' : rates.double ? 'double' : ''
   const rate = category ? rates[category] : null
   if (!rate) return room
+  const occupancyAdults = rate.occupancyAdults ?? room.occupancy_adults
+  const extraBedEnabled = Boolean(rate.extraBed?.enabled)
+  const extraBedCount = extraBedEnabled && Number(adults || 1) > Number(occupancyAdults || 0)
+    ? Math.max(0, Number(adults || 1) - Number(occupancyAdults || 0))
+    : Number(room.extra_bed_count || 0)
   return {
     ...room,
-    occupancy_adults: rate.occupancyAdults ?? room.occupancy_adults,
+    occupancy_adults: occupancyAdults,
     occupancy_children: rate.occupancyChildren ?? room.occupancy_children,
     base_price: rate.basePrice ?? room.base_price,
     offer_price: rate.offerPrice ?? null,
     size_sqft: rate.sizeSqft ?? room.size_sqft,
     selected_rate_category: category,
+    extra_bed_count: extraBedCount,
+    extra_bed_recommended: extraBedCount > 0,
+    extra_bed_available: extraBedEnabled,
+    extra_bed_preselected: rate.extraBed?.preselected ?? room.extra_bed_preselected ?? true,
+    extra_bed_price: rate.extraBed?.price ?? room.extra_bed_price ?? 0,
   }
+}
+
+function roomSupportsGuestIntent(room, adults = 1, children = 0) {
+  if (!room) return false
+  const requestedAdults = Number(adults || 1)
+  const requestedChildren = Number(children || 0)
+  const rates = room.rate_options || {}
+  const candidate = requestedAdults <= 1
+    ? (rates.single || rates.double || null)
+    : (rates.double || null)
+  if (!candidate) return requestedAdults <= 1 && Number(room.occupancy_adults || 0) >= requestedAdults && Number(room.occupancy_children || 0) >= requestedChildren
+  const adultsCapacity = Number(candidate.occupancyAdults ?? room.occupancy_adults ?? 0)
+  const childrenCapacity = Number(candidate.occupancyChildren ?? room.occupancy_children ?? 0)
+  const extraAdultCapacity = requestedAdults >= 3 && candidate.extraBed?.enabled ? 1 : 0
+  return adultsCapacity + extraAdultCapacity >= requestedAdults && childrenCapacity >= requestedChildren
+}
+
+function isExtraBedAmenity(amenity) {
+  return /extra\s*bed|additional\s*bed|rollaway/i.test(String(amenity?.name || ''))
+}
+
+function getExtraBedAmenity(amenities = [], room = {}) {
+  const amenity = amenities
+    .filter((item) => isExtraBedAmenity(item))
+    .sort((left, right) => Number(left.price || 0) - Number(right.price || 0) || String(left.name || '').localeCompare(String(right.name || '')))[0]
+  if (amenity) return { ...amenity, price: Number(amenity.price || 0) }
+  return {
+    id: '',
+    name: 'Extra bed',
+    description: 'Prepared for a 3-adult stay in this room.',
+    price: Number(room?.extra_bed_price || 0),
+    icon: 'bed',
+  }
+}
+
+function shouldShowExtraBedAmenity(room, adults = 1) {
+  return Number(adults || 1) === 3 && Number(room?.extra_bed_count || 0) > 0
+}
+
+function getMandatoryExtraBedTotal(room, adults = 1, roomsCount = 1, amenities = []) {
+  if (!shouldShowExtraBedAmenity(room, adults)) return 0
+  return Number(getExtraBedAmenity(amenities, room)?.price || 0) * Number(roomsCount || 1)
 }
 
 function AmenityCard({ amenity }) {
   return (
-    <FadeIn className="flex min-h-40 w-[66vw] max-w-[16rem] shrink-0 snap-start flex-col justify-between rounded-lg bg-white p-5 text-left shadow-soft ring-1 ring-stone-200/70 transition duration-300 hover:-translate-y-1 hover:shadow-card sm:w-60">
-      <span className="grid h-12 w-12 place-items-center text-amberline">
-        <AmenityVisual amenity={amenity} className="h-10 w-10" iconSize={30} />
-      </span>
-      <div className="mt-5">
-        <p className="text-base font-extrabold text-charcoal">{amenity.name}</p>
-        {amenity.description ? <p className="mt-2 line-clamp-2 text-sm font-medium leading-6 text-stone-600">{amenity.description}</p> : null}
-        <p className="mt-3 text-sm font-black text-amberline">{Number(amenity.price || 0) ? `Rs ${Number(amenity.price).toLocaleString('en-IN')}` : 'Included'}</p>
+    <StaggerItem className="min-w-0">
+      <div className="flex h-full min-h-32 gap-3 rounded-lg border border-stone-200 bg-white p-4 text-left shadow-sm transition duration-300 hover:-translate-y-0.5 hover:border-amberline/35 hover:shadow-soft">
+        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-md bg-amber-50 text-amberline">
+          <AmenityVisual amenity={amenity} className="h-8 w-8" iconSize={24} />
+        </span>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <p className="min-w-0 break-words text-base font-extrabold leading-snug text-charcoal">{amenity.name}</p>
+            <span className="shrink-0 rounded-md bg-bone px-2 py-1 text-[0.68rem] font-black uppercase tracking-[0.08em] text-amberline">{Number(amenity.price || 0) ? `Rs ${Number(amenity.price).toLocaleString('en-IN')}` : 'Included'}</span>
+          </div>
+          {amenity.description ? <p className="mt-2 line-clamp-2 text-sm font-semibold leading-6 text-stone-600">{amenity.description}</p> : null}
+        </div>
       </div>
-    </FadeIn>
+    </StaggerItem>
   )
 }
 

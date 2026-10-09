@@ -11,6 +11,7 @@ import { ensureOfferKindColumn } from './hotelService.js'
 const bookingRef = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 10)
 const PARTIAL_ADVANCE_PERCENT = 25
 const FIXED_TAX_RATE = 5
+const EXTRA_BED_VIRTUAL_AMENITY_ID = '00000000-0000-0000-0000-000000000003'
 
 export const BOOKING_MILESTONE_OFFERS = [
   {
@@ -291,6 +292,27 @@ async function findExtraBedAmenityId(db, hotelId) {
   return rows[0]?.id || ''
 }
 
+function isExtraBedAmenity(amenity = {}) {
+  return /extra\s*bed|additional\s*bed|rollaway/i.test(String(amenity.name || ''))
+}
+
+function normalizeExtraBedAmenityPrices(amenities = []) {
+  return amenities.map((amenity) => {
+    if (!isExtraBedAmenity(amenity)) return amenity
+    return { ...amenity, price: Number(amenity.price || 0) }
+  })
+}
+
+function virtualExtraBedAmenity(room = {}) {
+  return {
+    id: EXTRA_BED_VIRTUAL_AMENITY_ID,
+    name: 'Extra bed',
+    description: 'Prepared for a 3-adult stay in this room.',
+    price: Number(room.extra_bed_price || 0),
+    icon: 'bed',
+  }
+}
+
 export async function createBookingHold({ hotel, user, payload }) {
   return transaction(async (db) => {
     const checkIn = toDateOnly(payload.checkIn)
@@ -330,15 +352,21 @@ export async function createBookingHold({ hotel, user, payload }) {
     const roomSubtotal = Number(availability[0].subtotal || lockedRows.reduce((sum, row) => sum + Number(row.price), 0)) * roomsCount
     let selectedAmenityIds = [...new Set(payload.selectedAmenityIds || [])]
     const extraBedAmenityId = await findExtraBedAmenityId(db, hotel.id)
-    if (Number(payload.adults || 1) === 3 && availability[0]?.extra_bed_recommended) {
-      if (extraBedAmenityId && !selectedAmenityIds.includes(extraBedAmenityId)) {
-        selectedAmenityIds.push(extraBedAmenityId)
-      }
-    } else if (extraBedAmenityId) {
-      selectedAmenityIds = selectedAmenityIds.filter((id) => id !== extraBedAmenityId)
+    const extraBedAllowed = Number(payload.adults || 1) === 3 && availability[0]?.extra_bed_recommended
+    if (extraBedAllowed) {
+      const requiredExtraBedId = extraBedAmenityId || EXTRA_BED_VIRTUAL_AMENITY_ID
+      if (!selectedAmenityIds.includes(requiredExtraBedId)) selectedAmenityIds.push(requiredExtraBedId)
+      selectedAmenityIds = selectedAmenityIds.filter((id) => id !== (extraBedAmenityId ? EXTRA_BED_VIRTUAL_AMENITY_ID : ''))
+    } else {
+      selectedAmenityIds = selectedAmenityIds.filter((id) => id !== extraBedAmenityId && id !== EXTRA_BED_VIRTUAL_AMENITY_ID)
     }
 
-    const selectedAmenities = await findSelectedAmenities(db, hotel.id, selectedAmenityIds)
+    const virtualExtraBedSelected = extraBedAllowed && selectedAmenityIds.includes(EXTRA_BED_VIRTUAL_AMENITY_ID)
+    const persistedAmenityIds = selectedAmenityIds.filter((id) => id !== EXTRA_BED_VIRTUAL_AMENITY_ID)
+    const selectedAmenities = normalizeExtraBedAmenityPrices(await findSelectedAmenities(db, hotel.id, persistedAmenityIds))
+    if (virtualExtraBedSelected && !selectedAmenities.some((amenity) => isExtraBedAmenity(amenity))) {
+      selectedAmenities.push(virtualExtraBedAmenity(availability[0]))
+    }
     const amenitySubtotal = selectedAmenities.reduce((sum, amenity) => sum + Number(amenity.price || 0) * roomsCount, 0)
     const grossSubtotal = Math.round((roomSubtotal + amenitySubtotal + Number.EPSILON) * 100) / 100
     const appliedOffer = await findApplicableOffer(db, hotel.id, user?.id || null, payload.offerId, roomTypeId)
@@ -391,8 +419,10 @@ export async function createBookingHold({ hotel, user, payload }) {
         ? {
             extraBed: {
               required: true,
+              selected: true,
               count: Number(availability[0].extra_bed_count || 1),
-              note: 'Extra bed amenity added for requested adult occupancy.',
+              price: Number(selectedAmenities.find((amenity) => isExtraBedAmenity(amenity))?.price || availability[0].extra_bed_price || 0),
+              note: 'Extra-person/extra-bed charge is required for 3-adult occupancy and applies whether or not the bed is used.',
             },
           }
         : {}),
