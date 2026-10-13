@@ -1832,9 +1832,9 @@ function CreateBookingPanel({ rooms, manualBooking, setManualBooking, saving, on
 
 function SettingsPanel() {
   const milestones = [
-    { milestone: 5, redeem: 6, title: 'Complimentary meal or drink', text: 'Guest can redeem one meal or drink on the next booking.' },
-    { milestone: 10, redeem: 11, title: 'Rs 1,000 off', text: 'Guest can apply Rs 1,000 off on the next booking.' },
-    { milestone: 20, redeem: 21, title: 'Rs 2,000 off', text: 'Guest can apply Rs 2,000 off on the next booking.' },
+    { milestone: 5, title: 'Complimentary meal or drink', text: 'Guest can redeem one meal or drink on the next booking.' },
+    { milestone: 10, title: 'Rs 1,000 off', text: 'Guest can apply Rs 1,000 off on the next booking.' },
+    { milestone: 20, title: 'Rs 2,000 off', text: 'Guest can apply Rs 2,000 off on the next booking.' },
   ]
   return (
     <section className="grid gap-3 sm:gap-6">
@@ -1844,7 +1844,7 @@ function SettingsPanel() {
           <div className="grid gap-4">
             {milestones.map((item) => (
               <div key={item.milestone} className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                <p className="text-sm font-extrabold text-amber-950">{item.milestone} room bookings, redeem on booking {item.redeem}</p>
+                <p className="text-sm font-extrabold text-amber-950">{item.milestone} room nights, use on the next booking</p>
                 <h3 className="mt-1 text-xl font-black text-charcoal">{item.title}</h3>
                 <p className="mt-2 text-sm font-semibold leading-6 text-stone-700">{item.text}</p>
               </div>
@@ -1852,12 +1852,12 @@ function SettingsPanel() {
           </div>
           <div className="rounded-lg border border-white/70 bg-white/70 p-4 shadow-glass backdrop-blur-xl">
             <p className="text-xs font-black uppercase tracking-[0.14em] text-stone-500">Guest account preview</p>
-            <p className="mt-2 text-2xl font-black text-charcoal">Cross-hotel room credits</p>
+            <p className="mt-2 text-2xl font-black text-charcoal">Cross-hotel room-night credits</p>
             <div className="mt-4 overflow-hidden rounded-full bg-bone shadow-inner">
               <div className="h-3 rounded-full bg-[linear-gradient(90deg,#7f1d1d,#f59e0b)]" style={{ width: '50%' }} />
             </div>
             <p className="mt-3 text-sm font-semibold leading-6 text-stone-600">
-              Confirmed room bookings from every hotel in the group are counted together. When a guest redeems any milestone offer and the payment is confirmed, their journey resets to zero.
+              Confirmed room nights from every hotel in the group are counted together. A 3-night stay adds 3 credits for one room, and multi-room stays add room nights for each room.
             </p>
           </div>
         </div>
@@ -1990,7 +1990,9 @@ function UsersPanel({ users, filters, setFilters, saving, onOpen, onDelete }) {
           <div className="grid gap-3 p-3 sm:p-5 lg:gap-0 lg:divide-y lg:divide-white/60 lg:p-0">
             {filtered.map((user) => {
               const rewards = user.milestone_rewards || {}
-              const offerLabel = rewards.bestEligibleOffer?.title || (rewards.nextOffer ? `${rewards.roomsToNextOffer || 0} to ${rewards.nextOffer.title}` : '-')
+              const roomNightCredits = Number(rewards.completedRoomNights ?? rewards.completedRoomBookings ?? 0)
+              const roomNightsToNextOffer = Number(rewards.roomNightsToNextOffer ?? rewards.roomsToNextOffer ?? 0)
+              const offerLabel = rewards.bestEligibleOffer?.title || (rewards.nextOffer ? `${roomNightsToNextOffer} nights to ${rewards.nextOffer.title}` : '-')
               return (
                 <article key={user.id} className="grid gap-3 rounded-md border border-white/70 bg-white/65 p-3 shadow-sm backdrop-blur sm:p-4 lg:rounded-none lg:border-0 lg:bg-transparent lg:p-5 lg:shadow-none lg:grid-cols-[1fr_140px_160px_150px_190px_220px] lg:items-center">
                   <div className="flex min-w-0 gap-3">
@@ -2004,7 +2006,7 @@ function UsersPanel({ users, filters, setFilters, saving, onOpen, onDelete }) {
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:contents">
                     <CompactStat label="Bookings" value={user.bookings || 0} />
                     <CompactStat label="Revenue" value={`Rs ${Number(user.revenue || 0).toLocaleString('en-IN')}`} />
-                    <CompactStat label="Room credits" value={rewards.completedRoomBookings || 0} />
+                    <CompactStat label="Night credits" value={roomNightCredits} />
                     <CompactStat label="Special offer" value={offerLabel} />
                   </div>
                   <div className="grid grid-cols-[1fr_auto] gap-2 lg:flex lg:flex-wrap">
@@ -2753,7 +2755,7 @@ function UserProfileModal({ profile, saving, onDelete, onClose }) {
             <div className="mt-6 grid gap-3 sm:grid-cols-4">
               <Stat label="Bookings" value={user?.bookings || 0} />
               <Stat label="Revenue" value={`Rs ${Number(user?.revenue || 0).toLocaleString('en-IN')}`} />
-              <Stat label="Room credits" value={rewards.completedRoomBookings || 0} />
+              <Stat label="Night credits" value={rewards.completedRoomNights ?? rewards.completedRoomBookings ?? 0} />
               <Stat label="Last booking" value={user?.last_booking_at ? formatDate(user.last_booking_at) : '-'} />
             </div>
             <AdminMilestoneJourney rewards={rewards} />
@@ -2822,17 +2824,17 @@ function AdminBookingOfferBadges({ booking }) {
 }
 
 const adminMilestoneSegments = [
-  { from: 0, to: 5, title: 'Meal or drink', detail: 'Redeem on booking 6' },
-  { from: 5, to: 10, title: 'Rs 1,000 off', detail: 'Redeem on booking 11' },
-  { from: 10, to: 20, title: 'Rs 2,000 off', detail: 'Redeem on booking 21' },
+  { from: 0, to: 5, title: 'Meal or drink', detail: 'Use on the next booking after 5 room nights.' },
+  { from: 5, to: 10, title: 'Rs 1,000 off', detail: 'Use on the next booking after 10 room nights.' },
+  { from: 10, to: 20, title: 'Rs 2,000 off', detail: 'Use on the next booking after 20 room nights.' },
 ]
 
 function AdminMilestoneJourney({ rewards = {} }) {
-  const completed = Number(rewards.completedRoomBookings || 0)
+  const completed = Number(rewards.completedRoomNights ?? rewards.completedRoomBookings ?? 0)
   const cappedCompleted = Math.min(Math.max(completed, 0), 20)
   const offer = rewards.bestEligibleOffer || null
   const nextOffer = rewards.nextOffer || null
-  const roomsToNextOffer = Number(rewards.roomsToNextOffer || 0)
+  const roomNightsToNextOffer = Number(rewards.roomNightsToNextOffer ?? rewards.roomsToNextOffer ?? 0)
   const headline = offer ? `${offer.title} is ready` : nextOffer ? `Next unlock: ${nextOffer.title}` : 'Top milestone is ready'
 
   return (
@@ -2842,7 +2844,7 @@ function AdminMilestoneJourney({ rewards = {} }) {
           <p className="text-xs font-black uppercase tracking-[0.14em] text-amber-900">Special offer journey</p>
           <p className="mt-1 text-lg font-black text-charcoal">{headline}</p>
         </div>
-        <span className="w-fit rounded-md bg-white px-3 py-2 text-sm font-black text-amber-900">{completed.toLocaleString('en-IN')} / 20 rooms</span>
+        <span className="w-fit rounded-md bg-white px-3 py-2 text-sm font-black text-amber-900">{completed.toLocaleString('en-IN')} / 20 nights</span>
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_1fr_2fr]">
         {adminMilestoneSegments.map((segment) => {
@@ -2867,9 +2869,9 @@ function AdminMilestoneJourney({ rewards = {} }) {
         })}
       </div>
       <p className="mt-3 text-sm font-semibold leading-6 text-stone-700">
-        Counts confirmed room bookings across all hotels since this guest's last redeemed milestone. If the guest skips a ready offer, the count keeps increasing. A confirmed redemption resets the count to 0.
+        Counts confirmed room nights across all hotels since this guest's last redeemed milestone. If the guest skips a ready offer, the count keeps increasing. A confirmed redemption resets the count to 0.
       </p>
-      {nextOffer && !offer ? <p className="mt-2 text-sm font-black text-amber-900">{roomsToNextOffer.toLocaleString('en-IN')} more room booking{roomsToNextOffer === 1 ? '' : 's'} needed.</p> : null}
+      {nextOffer && !offer ? <p className="mt-2 text-sm font-black text-amber-900">{roomNightsToNextOffer.toLocaleString('en-IN')} more room night{roomNightsToNextOffer === 1 ? '' : 's'} needed.</p> : null}
       {rewards.lastRedeemedAt ? <p className="mt-2 text-xs font-bold uppercase tracking-[0.1em] text-stone-500">Last reset: {formatDateTime(rewards.lastRedeemedAt)}</p> : null}
     </div>
   )
@@ -2899,8 +2901,8 @@ function AdminMilestoneHistory({ history = [] }) {
               <div className="mt-3 grid gap-2">
                 <Line label="Booking" value={item.bookingReference} />
                 <Line label="Hotel" value={item.hotelName || '-'} />
-                <Line label="Milestone" value={`${Number(item.milestone || 0).toLocaleString('en-IN')} rooms`} />
-                <Line label="Rooms booked" value={Number(item.roomsCount || 0).toLocaleString('en-IN')} />
+                <Line label="Milestone" value={`${Number(item.milestone || 0).toLocaleString('en-IN')} room nights`} />
+                <Line label="Stay credit" value={Number(item.roomNights || 0).toLocaleString('en-IN')} />
               </div>
             </div>
           ))}

@@ -35,14 +35,14 @@ const fallbackFaqs = [
 ]
 
 export function TermsPage() {
-  const { data, loading, error } = useAsync(() => apiFetch('/tenant'))
+  const { data, loading, error } = useAsync(() => apiFetch('/tenant', { skipAuth: true }))
   if (loading) return <LoadingState label="Opening terms" />
   if (error) return <PolicyError error={error} />
   return <PolicyLayout hotel={data.hotel} title="Terms and Conditions" eyebrow="Guest policy" icon={Scale}><TermsContent hotel={data.hotel} /></PolicyLayout>
 }
 
 export function FaqPage() {
-  const { data, loading, error } = useAsync(() => apiFetch('/tenant'))
+  const { data, loading, error } = useAsync(() => apiFetch('/tenant', { skipAuth: true }))
   if (loading) return <LoadingState label="Opening FAQ" />
   if (error) return <PolicyError error={error} />
   const faqs = data.faqs?.length ? data.faqs : fallbackFaqs

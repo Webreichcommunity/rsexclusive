@@ -1,28 +1,59 @@
+import { useEffect, useState } from 'react'
+import { getPublicHotelLoadingProfile } from '../../services/apiClient.js'
+
 export function LoadingState({ label = 'Loading', brand }) {
-  const displayBrand = brand || getLoadingBrand()
+  const [profile, setProfile] = useState(() => getPublicHotelLoadingProfile())
+  const displayBrand = brand || profile.name || getLoadingBrand()
+  const image = profile.images?.[0] || ''
+  const status = loadingStatus(label)
+
+  useEffect(() => {
+    const refresh = () => setProfile(getPublicHotelLoadingProfile())
+    window.addEventListener('rs-exclusive-public-media-ready', refresh)
+    return () => window.removeEventListener('rs-exclusive-public-media-ready', refresh)
+  }, [])
 
   return (
-    <div className="container-page grid min-h-[58vh] place-items-center py-12">
-      <div className="relative w-full max-w-md overflow-hidden rounded-lg border border-white/70 bg-[linear-gradient(135deg,rgba(255,255,255,0.96),rgba(250,247,241,0.9),rgba(127,29,29,0.08))] p-7 text-center shadow-panel backdrop-blur-xl">
-        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amberline via-yellow-600/60 to-charcoal" />
-        <div className="mx-auto grid h-16 w-16 place-items-center rounded-lg bg-charcoal text-white shadow-soft">
-          <span className="text-2xl font-black">R</span>
-        </div>
-        <div className="mt-6">
-          <p className="text-xs font-black uppercase tracking-[0.22em] text-amberline">{displayBrand}</p>
-          <p className="mt-2 text-2xl font-black text-charcoal">{label}</p>
-        </div>
-        <div className="mx-auto mt-6 flex w-44 items-center justify-center gap-2">
-          {[0, 1, 2].map((item) => (
-            <span
-              key={item}
-              className="h-2.5 w-2.5 animate-pulse rounded-full bg-amberline"
-              style={{ animationDelay: `${item * 180}ms` }}
-            />
-          ))}
-        </div>
-        <div className="mt-6 h-1.5 overflow-hidden rounded-full bg-stone-200">
-          <div className="h-full w-1/2 animate-[loading-slide_1.35s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-wine via-amberline to-charcoal" />
+    <div className="relative min-h-[calc(100svh-72px)] overflow-hidden bg-charcoal text-white">
+      {image ? (
+        <img
+          src={image}
+          alt=""
+          className="loading-kenburns absolute inset-0 h-full w-full object-cover"
+          loading="eager"
+          aria-hidden="true"
+        />
+      ) : (
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_42%,rgba(127,29,29,0.34),transparent_34%),linear-gradient(135deg,#111111_0%,#222222_52%,#0c0a09_100%)]" />
+      )}
+      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,0.86)_0%,rgba(0,0,0,0.58)_48%,rgba(0,0,0,0.24)_100%)]" />
+      <div className="absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-black/70 to-transparent" />
+
+      <div className="container-page relative flex min-h-[calc(100svh-72px)] items-center py-12">
+        <div className="max-w-2xl">
+          <p className="inline-flex max-w-full rounded-md border border-white/18 bg-white/10 px-3 py-2 text-[0.66rem] font-black uppercase leading-5 tracking-[0.14em] text-amber-100 shadow-[0_14px_42px_rgba(0,0,0,0.22)] backdrop-blur-md sm:text-xs sm:tracking-[0.18em]">
+            {profile.city ? `${profile.city} hospitality` : 'Direct hotel booking'}
+          </p>
+          <h1 className="mt-5 max-w-3xl text-4xl font-black leading-[1.02] text-white drop-shadow-[0_8px_30px_rgba(0,0,0,0.58)] sm:text-5xl md:text-6xl">
+            {displayBrand}
+          </h1>
+          <p className="mt-5 max-w-xl text-base font-semibold leading-8 text-white/86 md:text-lg">
+            {status}
+          </p>
+          <p className="mt-3 max-w-xl text-sm font-bold leading-7 text-amber-100/90">
+            Please stay with us, we are crafting the best experience for you.
+          </p>
+
+          <div className="mt-8 max-w-xl">
+            <div className="h-1.5 overflow-hidden rounded-full bg-white/20">
+              <div className="loading-progress h-full rounded-full bg-white" />
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2 text-xs font-black uppercase tracking-[0.12em] text-white/74">
+              <span className="rounded-md border border-white/16 bg-white/10 px-3 py-2 backdrop-blur-md">Rooms</span>
+              <span className="rounded-md border border-white/16 bg-white/10 px-3 py-2 backdrop-blur-md">Offers</span>
+              <span className="rounded-md border border-white/16 bg-white/10 px-3 py-2 backdrop-blur-md">Gallery</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -64,4 +95,13 @@ function tenantDisplayName(value) {
   if (/(^|-)rg($|-)|rg-exclusive|r-g-exclusive/.test(key)) return 'RG Exclusive Stay & Fine Dine'
   if (/ranjeet/.test(key)) return 'Ranjeet Hotel'
   return toTitle(value)
+}
+
+function loadingStatus(label) {
+  const text = String(label || '').toLowerCase()
+  if (text.includes('hotel')) return 'Preparing real hotel details, rooms, offers, and gallery for your visit.'
+  if (text.includes('properties')) return 'Bringing the hotel collection into view.'
+  if (text.includes('booking')) return 'Preparing a secure direct booking experience.'
+  if (text.includes('account') || text.includes('session') || text.includes('access')) return label
+  return 'Setting up a smoother hotel experience for you.'
 }

@@ -107,7 +107,10 @@ export function BookingPage() {
   const authDraftRestored = useRef(false)
   const defaultOfferApplied = useRef(false)
   const loadAvailabilityRef = useRef(null)
-  const { data, loading, error } = useAsync(() => apiFetch('/tenant'), authLoading ? 'auth-loading' : `${firebaseUser?.uid || 'guest'}:${firebaseUser?.emailVerified ? 'verified' : 'unverified'}`)
+  const { data, loading, error } = useAsync(
+    () => apiFetch('/tenant', { skipAuth: !isAuthenticated }),
+    authLoading ? 'auth-loading' : `${firebaseUser?.uid || 'guest'}:${firebaseUser?.emailVerified ? 'verified' : 'unverified'}`,
+  )
   const step = params.get('step') || 'list'
 
   const allRooms = useMemo(() => data?.rooms || [], [data])
@@ -584,7 +587,7 @@ export function BookingPage() {
         return
       }
 
-      if (!window.Razorpay) {
+      if (!(await loadRazorpayCheckout())) {
         setStatus({ loading: false, error: '', paymentError: 'Payment checkout could not load. Please refresh and try again.' })
         return
       }
@@ -926,8 +929,8 @@ function RoomCard({ room, adults, amenities, searched, selected, loading, offers
           ) : null}
           <div className={`rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 ${offers.length ? '' : 'sm:col-span-2'}`}>
             <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-900">Special offers</p>
-            <p className="text-sm font-extrabold text-charcoal">Bookings count across hotels</p>
-            <p className="hidden text-xs font-semibold leading-5 text-stone-600 sm:block">Unlock a meal or drink at 5 rooms, then Rs 1,000 and Rs 2,000 off milestones.</p>
+            <p className="text-sm font-extrabold text-charcoal">Room nights count across hotels</p>
+            <p className="hidden text-xs font-semibold leading-5 text-stone-600 sm:block">Every paid night moves guests toward meal, drink, and discount rewards.</p>
           </div>
         </div>
         <div className="mt-auto flex flex-wrap gap-4 border-t border-mist pt-3 text-sm font-semibold text-stone-600">
@@ -1015,6 +1018,7 @@ function RoomCardOfferPicker({ offers, selectedOfferId, onSelectOffer }) {
 
 function RotatingRoomImage({ room, className }) {
   const images = useMemo(() => getRoomImages(room), [room])
+  const [frameRef, inView] = useInViewRotation()
   const [index, setIndex] = useState(0)
   const [openImageIndex, setOpenImageIndex] = useState(null)
   const [pausedUntil, setPausedUntil] = useState(0)
@@ -1027,10 +1031,10 @@ function RotatingRoomImage({ room, className }) {
   }, [paused, pausedUntil])
 
   useEffect(() => {
-    if (images.length < 2 || paused) return undefined
-    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 2400)
+    if (!inView || images.length < 2 || paused) return undefined
+    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 2800)
     return () => window.clearInterval(timer)
-  }, [images.length, paused])
+  }, [images.length, inView, paused])
 
   function openFullImage(event) {
     event.stopPropagation()
@@ -1039,7 +1043,7 @@ function RotatingRoomImage({ room, className }) {
   }
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-stone-200">
+    <div ref={frameRef} className="relative h-full w-full overflow-hidden bg-stone-200">
       <button className="relative block h-full w-full text-left" type="button" aria-label="Pause room image rotation" onClick={() => setPausedUntil(Date.now() + 5000)}>
       {images.map((image, imageIndex) => (
         <img
@@ -1047,7 +1051,7 @@ function RotatingRoomImage({ room, className }) {
           src={image.url || fallbackRoomImage}
           alt={image.alt || room.name}
           loading="lazy"
-          className={`absolute inset-0 transition-opacity duration-700 ease-out ${className} ${imageIndex === index ? 'opacity-100' : 'opacity-0'}`}
+          className={`absolute inset-0 transition duration-[2800ms] ease-out ${className} ${imageIndex === index ? 'scale-105 opacity-100' : 'scale-100 opacity-0'}`}
         />
       ))}
       </button>
@@ -1433,7 +1437,7 @@ const bookingMilestoneSegments = [
 function MilestoneOfferControl({ rewards = {}, discount, selected, subtotalBeforeRedemption, isAuthenticated, onChange, onUnavailableAction }) {
   const offer = rewards.bestEligibleOffer || null
   const nextOffer = rewards.nextOffer || null
-  const completed = Number(rewards.completedRoomBookings || 0)
+  const completed = Number(rewards.completedRoomNights ?? rewards.completedRoomBookings ?? 0)
   const cappedCompleted = Math.min(Math.max(completed, 0), 20)
 
   function explainLocked() {
@@ -1442,7 +1446,8 @@ function MilestoneOfferControl({ rewards = {}, discount, selected, subtotalBefor
       return
     }
     if (nextOffer) {
-      onUnavailableAction?.('Special offer locked', `${Math.max(0, nextOffer.milestone - completed).toLocaleString('en-IN')} more room booking${nextOffer.milestone - completed === 1 ? '' : 's'} unlock ${nextOffer.title}.`)
+      const remaining = Math.max(0, nextOffer.milestone - completed)
+      onUnavailableAction?.('Special offer locked', `${remaining.toLocaleString('en-IN')} more room night${remaining === 1 ? '' : 's'} unlock ${nextOffer.title}.`)
       return
     }
     onUnavailableAction?.('Special offer locked', `This offer needs a payable subtotal above Rs 1. Current subtotal is Rs ${subtotalBeforeRedemption.toLocaleString('en-IN')}.`)
@@ -1454,7 +1459,7 @@ function MilestoneOfferControl({ rewards = {}, discount, selected, subtotalBefor
         <div>
           <p className="flex items-center gap-2 text-sm font-extrabold text-charcoal"><Gift size={17} className="text-amberline" /> Milestone special offer</p>
           <p className="mt-1 text-xs font-semibold leading-5 text-stone-600">
-            {offer ? `${completed.toLocaleString('en-IN')} room bookings completed since your last redemption. You can redeem ${offer.title} now.` : `${completed.toLocaleString('en-IN')} room bookings completed since your last redemption.`}
+            {offer ? `${completed.toLocaleString('en-IN')} room nights completed since your last redemption. You can redeem ${offer.title} now.` : `${completed.toLocaleString('en-IN')} room nights completed since your last redemption.`}
           </p>
         </div>
         {selected && offer ? <span className="rounded-md bg-white px-3 py-2 text-sm font-black text-emerald-800">{discount ? `- Rs ${discount.toLocaleString('en-IN')}` : 'Meal/drink'}</span> : null}
@@ -1468,7 +1473,7 @@ function MilestoneOfferControl({ rewards = {}, discount, selected, subtotalBefor
             <div key={segment.to} className="min-w-0 rounded-md border border-amber-100 bg-white p-3">
               <div className="flex min-h-[58px] flex-col justify-between gap-2">
                 <span className={`w-fit rounded-md px-2 py-1 text-[0.68rem] font-black uppercase tracking-[0.08em] ${complete ? 'bg-emerald-50 text-emerald-700' : 'bg-bone text-stone-500'}`}>
-                  {segment.from} to {segment.to} rooms
+                  {segment.from} to {segment.to} nights
                 </span>
                 <span className="break-words text-sm font-black leading-5 text-charcoal">{segment.title}</span>
               </div>
@@ -1481,7 +1486,7 @@ function MilestoneOfferControl({ rewards = {}, discount, selected, subtotalBefor
         })}
       </div>
       <p className="mt-2 text-xs font-bold text-stone-600">
-        {offer ? `Redeems on this booking and resets the journey to 0 after payment confirmation. Your used offer stays saved in account history.` : nextOffer ? `${Math.max(0, nextOffer.milestone - completed).toLocaleString('en-IN')} more room booking${nextOffer.milestone - completed === 1 ? '' : 's'} to unlock ${nextOffer.title}.` : 'All milestone offers are complete.'}
+        {offer ? `Redeems on this booking and resets the journey to 0 after payment confirmation. Your used offer stays saved in account history.` : nextOffer ? `${Math.max(0, nextOffer.milestone - completed).toLocaleString('en-IN')} more room night${nextOffer.milestone - completed === 1 ? '' : 's'} to unlock ${nextOffer.title}.` : 'All milestone offers are complete.'}
       </p>
       <button
         type="button"
@@ -1887,6 +1892,29 @@ function roomSupportsGuestIntent(room, adults = 1, children = 0) {
   return adultsCapacity + extraAdultCapacity >= requestedAdults && childrenCapacity >= requestedChildren
 }
 
+function useInViewRotation() {
+  const ref = useRef(null)
+  const [inView, setInView] = useState(false)
+
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return undefined
+    if (typeof IntersectionObserver === 'undefined') {
+      setInView(true)
+      return undefined
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setInView(entry.isIntersecting),
+      { rootMargin: '120px 0px', threshold: 0.35 },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  return [ref, inView]
+}
+
 function getAmenityIcon(amenity) {
   const value = String(amenity?.icon || amenity?.name || '').toLowerCase()
   if (value.includes('wifi') || value.includes('internet')) return Wifi
@@ -1906,6 +1934,28 @@ function AmenityVisual({ amenity, className = 'h-8 w-8', iconSize = 22 }) {
 
 function isUrl(value) {
   return /^https?:\/\//i.test(String(value || '').trim())
+}
+
+let razorpayScriptPromise = null
+
+function loadRazorpayCheckout() {
+  if (window.Razorpay) return Promise.resolve(true)
+  razorpayScriptPromise = razorpayScriptPromise || new Promise((resolve) => {
+    const existing = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]')
+    if (existing) {
+      existing.addEventListener('load', () => resolve(Boolean(window.Razorpay)), { once: true })
+      existing.addEventListener('error', () => resolve(false), { once: true })
+      return
+    }
+
+    const script = document.createElement('script')
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js'
+    script.async = true
+    script.onload = () => resolve(Boolean(window.Razorpay))
+    script.onerror = () => resolve(false)
+    document.head.appendChild(script)
+  })
+  return razorpayScriptPromise
 }
 
 function findExtraBedAmenity(amenities = []) {

@@ -129,10 +129,10 @@ export function AccountPage() {
 
   const displayName = profileForm.fullName || firebaseUser?.displayName || firebaseUser?.email || 'Guest'
   const milestoneRewards = appUser.data?.user?.milestoneRewards || {}
-  const completedRoomBookings = Number(milestoneRewards.completedRoomBookings || 0)
+  const completedRoomNights = Number(milestoneRewards.completedRoomNights ?? milestoneRewards.completedRoomBookings ?? 0)
   const bestOffer = milestoneRewards.bestEligibleOffer || null
   const nextOffer = milestoneRewards.nextOffer || null
-  const roomsToNextOffer = Number(milestoneRewards.roomsToNextOffer || 0)
+  const roomNightsToNextOffer = Number(milestoneRewards.roomNightsToNextOffer ?? milestoneRewards.roomsToNextOffer ?? 0)
   const redemptionHistory = Array.isArray(milestoneRewards.redemptionHistory) ? milestoneRewards.redemptionHistory : []
   const closeBookingDetails = () => {
     setSelectedBooking(null)
@@ -168,7 +168,7 @@ export function AccountPage() {
               </div>
             </div>
             <div className="mt-5 grid grid-cols-2 gap-3">
-              <HeroStat icon={Gift} label="Milestone rooms" value={completedRoomBookings.toLocaleString('en-IN')} />
+              <HeroStat icon={Gift} label="Milestone nights" value={completedRoomNights.toLocaleString('en-IN')} />
               <HeroStat icon={Hotel} label="Hotels visited" value={bookingStats.hotels} />
             </div>
           </FadeIn>
@@ -178,7 +178,7 @@ export function AccountPage() {
       <section className="container-page -mt-8 pb-16 md:pb-24">
         <div className="grid gap-4 sm:grid-cols-3">
           <MetricCard icon={CalendarDays} label="Bookings" value={bookingStats.bookings} text="Across all hotels" />
-          <MetricCard icon={Gift} label="Special offer" value={bestOffer ? bestOffer.title : `${completedRoomBookings}/${nextOffer?.milestone || 20}`} text={bestOffer ? 'Eligible to redeem on your next booking' : nextOffer ? `${roomsToNextOffer.toLocaleString('en-IN')} room booking${roomsToNextOffer === 1 ? '' : 's'} to unlock` : 'Milestones complete'} />
+          <MetricCard icon={Gift} label="Special offer" value={bestOffer ? bestOffer.title : `${completedRoomNights}/${nextOffer?.milestone || 20}`} text={bestOffer ? 'Eligible to redeem on your next booking' : nextOffer ? `${roomNightsToNextOffer.toLocaleString('en-IN')} room night${roomNightsToNextOffer === 1 ? '' : 's'} to unlock` : 'Milestones complete'} />
           <MetricCard icon={Sparkles} label="Paid value" value={rupees(bookingStats.paid)} text="Confirmed payment value" />
         </div>
 
@@ -487,22 +487,22 @@ function BookingOfferBadges({ booking }) {
 }
 
 const milestoneSegments = [
-  { from: 0, to: 5, title: 'Meal or drink', detail: 'Redeem on booking 6' },
-  { from: 5, to: 10, title: 'Rs 1,000 off', detail: 'Redeem on booking 11' },
-  { from: 10, to: 20, title: 'Rs 2,000 off', detail: 'Redeem on booking 21' },
+  { from: 0, to: 5, title: 'Meal or drink', detail: 'Use on your next booking after 5 room nights.' },
+  { from: 5, to: 10, title: 'Rs 1,000 off', detail: 'Use on your next booking after 10 room nights.' },
+  { from: 10, to: 20, title: 'Rs 2,000 off', detail: 'Use on your next booking after 20 room nights.' },
 ]
 
 function MilestoneJourneyCard({ rewards = {} }) {
-  const completed = Number(rewards.completedRoomBookings || 0)
+  const completed = Number(rewards.completedRoomNights ?? rewards.completedRoomBookings ?? 0)
   const cappedCompleted = Math.min(Math.max(completed, 0), 20)
   const offer = rewards.bestEligibleOffer || null
   const nextOffer = rewards.nextOffer || null
-  const roomsToNextOffer = Number(rewards.roomsToNextOffer || 0)
+  const roomNightsToNextOffer = Number(rewards.roomNightsToNextOffer ?? rewards.roomsToNextOffer ?? 0)
   const headline = offer ? `${offer.title} is ready` : nextOffer ? `Next unlock: ${nextOffer.title}` : 'Top milestone is ready'
   const helper = offer
-    ? `Use it on your next paid booking. After payment confirmation, your room count resets to 0 and this redemption stays saved in history.`
+    ? `Use it on your next paid booking. After payment confirmation, your room-night count resets to 0 and this redemption stays saved in history.`
     : nextOffer
-      ? `${roomsToNextOffer.toLocaleString('en-IN')} more room booking${roomsToNextOffer === 1 ? '' : 's'} unlock ${nextOffer.title}. If you skip a ready offer, your count keeps increasing.`
+      ? `${roomNightsToNextOffer.toLocaleString('en-IN')} more room night${roomNightsToNextOffer === 1 ? '' : 's'} unlock ${nextOffer.title}. If you skip a ready offer, your count keeps increasing.`
       : 'You can redeem the best available milestone on your next booking. Redeeming resets the journey to 0.'
 
   return (
@@ -512,7 +512,7 @@ function MilestoneJourneyCard({ rewards = {} }) {
           <p className="eyebrow">Milestone journey</p>
           <h2 className="mt-1 text-2xl font-black text-charcoal">{headline}</h2>
         </div>
-        <span className="w-fit rounded-md bg-amber-50 px-3 py-2 text-sm font-black text-amber-900">{completed.toLocaleString('en-IN')} / 20 rooms</span>
+        <span className="w-fit rounded-md bg-amber-50 px-3 py-2 text-sm font-black text-amber-900">{completed.toLocaleString('en-IN')} / 20 nights</span>
       </div>
       <div className="mt-5 grid gap-2 sm:grid-cols-[1fr_1fr_2fr]">
         {milestoneSegments.map((segment) => {
@@ -523,7 +523,7 @@ function MilestoneJourneyCard({ rewards = {} }) {
             <div key={segment.to} className="rounded-md border border-stone-200 bg-white p-3">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="text-xs font-black uppercase tracking-[0.12em] text-stone-500">{segment.from}-{segment.to} rooms</p>
+                  <p className="text-xs font-black uppercase tracking-[0.12em] text-stone-500">{segment.from}-{segment.to} nights</p>
                   <p className="mt-1 text-sm font-black text-charcoal">{segment.title}</p>
                 </div>
                 <span className={`rounded-md px-2 py-1 text-xs font-black ${complete ? 'bg-emerald-50 text-emerald-700' : 'bg-bone text-stone-600'}`}>{complete ? 'Ready' : `${fill}%`}</span>
@@ -568,8 +568,8 @@ function MilestoneRedemptionHistory({ history = [] }) {
               <div className="mt-3 grid gap-2 text-sm">
                 <Line label="Booking" value={item.bookingReference} />
                 <Line label="Hotel" value={item.hotelName || '-'} />
-                <Line label="Booking number" value={`Milestone ${item.milestone || item.completedRoomBookings || '-'}`} />
-                <Line label="Rooms in booking" value={`${Number(item.roomsCount || 0).toLocaleString('en-IN')} room${Number(item.roomsCount || 0) === 1 ? '' : 's'}`} />
+                <Line label="Milestone" value={`${item.milestone || item.completedRoomNights || item.completedRoomBookings || '-'} room nights`} />
+                <Line label="Stay credit" value={`${Number(item.roomNights || 0).toLocaleString('en-IN')} room night${Number(item.roomNights || 0) === 1 ? '' : 's'}`} />
               </div>
             </article>
           ))}

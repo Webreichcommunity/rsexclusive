@@ -17,11 +17,11 @@ export function AppShell({ children, mode }) {
   const { isAuthenticated, firebaseUser } = useAuth()
   const isConsoleRoute = isConsolePath(location.pathname, mode)
   const tenant = useAsync(
-    () => (mode.isTenant && !isConsoleRoute ? apiFetch('/tenant') : Promise.resolve({ hotel: null, offers: [] })),
+    () => (mode.isTenant && !isConsoleRoute ? apiFetch('/tenant', { skipAuth: true }) : Promise.resolve({ hotel: null, offers: [] })),
     mode.isTenant && !isConsoleRoute ? `tenant:${mode.key}:${firebaseUser?.uid || 'guest'}:${firebaseUser?.emailVerified ? 'verified' : 'unverified'}` : 'group',
   )
   const collection = useAsync(
-    () => (mode.isTenant && !isConsoleRoute ? apiFetch('/hotels') : Promise.resolve({ hotels: [] })),
+    () => (mode.isTenant && !isConsoleRoute ? apiFetch('/hotels', { skipAuth: true }) : Promise.resolve({ hotels: [] })),
     mode.isTenant && !isConsoleRoute ? `tenant-collection:${mode.key}` : 'tenant-collection-empty',
   )
   const hotel = tenant.data?.hotel

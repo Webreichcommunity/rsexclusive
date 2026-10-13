@@ -16,7 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { FadeIn, Stagger, StaggerItem } from '../../components/ui/Motion.jsx'
 import { AutoScrollRow } from '../../components/ui/AutoScrollRow.jsx'
@@ -180,7 +180,7 @@ function normalizePhone(value) {
 }
 
 export function HotelExperience() {
-  const { data, loading, error } = useAsync(() => apiFetch('/tenant'))
+  const { data, loading, error } = useAsync(() => apiFetch('/tenant', { skipAuth: true }))
   const [defaultCheckIn, defaultCheckOut] = defaultDates()
   const [search, setSearch] = useState({ checkIn: defaultCheckIn, checkOut: defaultCheckOut, adults: 1, children: 0, roomsCount: 1 })
   const [offersModalOpen, setOffersModalOpen] = useState(false)
@@ -679,8 +679,8 @@ function RoomShowcase({ room, bookingUrl, adults = 1, amenities = [], offers = [
             {offers.length ? <HomeRoomOfferPicker offers={offers} availabilityUrl={availabilityUrl} /> : null}
             <div className={`rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 ${offers.length ? '' : 'sm:col-span-2'}`}>
               <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-900">Special offers</p>
-              <p className="text-sm font-extrabold text-charcoal">Bookings count across hotels</p>
-              <p className="hidden text-xs font-semibold leading-5 text-stone-600 sm:block">Unlock a meal or drink, then Rs 1,000 and Rs 2,000 off milestones.</p>
+              <p className="text-sm font-extrabold text-charcoal">Room nights count across hotels</p>
+              <p className="hidden text-xs font-semibold leading-5 text-stone-600 sm:block">Every paid night moves guests toward meal, drink, and discount rewards.</p>
             </div>
           </div>
         </div>
@@ -775,6 +775,7 @@ function HomeRoomOfferPicker({ offers, availabilityUrl }) {
 
 function RotatingRoomImage({ room, className }) {
   const images = useMemo(() => getRoomImages(room), [room])
+  const [frameRef, inView] = useInViewRotation()
   const [index, setIndex] = useState(0)
   const [openImageIndex, setOpenImageIndex] = useState(null)
   const [pausedUntil, setPausedUntil] = useState(0)
@@ -787,10 +788,10 @@ function RotatingRoomImage({ room, className }) {
   }, [paused, pausedUntil])
 
   useEffect(() => {
-    if (images.length < 2 || paused) return undefined
-    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 2400)
+    if (!inView || images.length < 2 || paused) return undefined
+    const timer = window.setInterval(() => setIndex((current) => (current + 1) % images.length), 2800)
     return () => window.clearInterval(timer)
-  }, [images.length, paused])
+  }, [images.length, inView, paused])
 
   function openFullImage(event) {
     event.stopPropagation()
@@ -799,7 +800,7 @@ function RotatingRoomImage({ room, className }) {
   }
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-stone-200">
+    <div ref={frameRef} className="relative h-full w-full overflow-hidden bg-stone-200">
       <button className="relative block h-full w-full text-left" type="button" aria-label="Pause room image rotation" onClick={() => setPausedUntil(Date.now() + 5000)}>
       {images.map((image, imageIndex) => (
         <img
@@ -807,7 +808,7 @@ function RotatingRoomImage({ room, className }) {
           src={image.url || fallbackRoomImage}
           alt={image.alt || room.name}
           loading="lazy"
-          className={`absolute inset-0 transition-opacity duration-700 ease-out ${className} ${imageIndex === index ? 'opacity-100' : 'opacity-0'}`}
+          className={`absolute inset-0 transition duration-[2800ms] ease-out ${className} ${imageIndex === index ? 'scale-105 opacity-100' : 'scale-100 opacity-0'}`}
         />
       ))}
       </button>
@@ -837,6 +838,29 @@ function RotatingRoomImage({ room, className }) {
       ) : null}
     </div>
   )
+}
+
+function useInViewRotation() {
+  const ref = useRef(null)
+  const [inView, setInView] = useState(false)
+
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return undefined
+    if (typeof IntersectionObserver === 'undefined') {
+      setInView(true)
+      return undefined
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setInView(entry.isIntersecting),
+      { rootMargin: '120px 0px', threshold: 0.35 },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  return [ref, inView]
 }
 
 function getRoomImages(room) {

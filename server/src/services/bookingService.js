@@ -19,7 +19,7 @@ export const BOOKING_MILESTONE_OFFERS = [
     milestone: 5,
     redeemOnBooking: 6,
     title: 'Complimentary meal or drink',
-    description: 'Complete 5 room bookings across the group and redeem one complimentary meal or drink on your next booking.',
+    description: 'Complete 5 room nights across the group and redeem one complimentary meal or drink on your next booking.',
     discountAmount: 0,
   },
   {
@@ -27,7 +27,7 @@ export const BOOKING_MILESTONE_OFFERS = [
     milestone: 10,
     redeemOnBooking: 11,
     title: 'Rs 1,000 off',
-    description: 'Complete 10 room bookings across the group and redeem Rs 1,000 off on your next booking.',
+    description: 'Complete 10 room nights across the group and redeem Rs 1,000 off on your next booking.',
     discountAmount: 1000,
   },
   {
@@ -35,7 +35,7 @@ export const BOOKING_MILESTONE_OFFERS = [
     milestone: 20,
     redeemOnBooking: 21,
     title: 'Rs 2,000 off',
-    description: 'Complete 20 room bookings across the group and redeem Rs 2,000 off on your next booking.',
+    description: 'Complete 20 room nights across the group and redeem Rs 2,000 off on your next booking.',
     discountAmount: 2000,
   },
 ]
@@ -117,16 +117,18 @@ export function calculateMilestoneOfferDiscount(offer, eligibleSubtotal) {
 }
 
 function buildMilestoneProgress(row = {}, redemptionHistory = []) {
-  const completedRoomBookings = Math.max(0, Number(row.completed_room_bookings || 0))
-  const eligibleOffers = BOOKING_MILESTONE_OFFERS.filter((offer) => completedRoomBookings >= offer.milestone)
+  const completedRoomNights = Math.max(0, Number(row.completed_room_nights ?? row.completed_room_bookings ?? 0))
+  const eligibleOffers = BOOKING_MILESTONE_OFFERS.filter((offer) => completedRoomNights >= offer.milestone)
   const bestEligibleOffer = eligibleOffers[eligibleOffers.length - 1] || null
-  const nextOffer = BOOKING_MILESTONE_OFFERS.find((offer) => completedRoomBookings < offer.milestone) || null
+  const nextOffer = BOOKING_MILESTONE_OFFERS.find((offer) => completedRoomNights < offer.milestone) || null
   return {
-    completedRoomBookings,
+    completedRoomNights,
+    completedRoomBookings: completedRoomNights,
     eligibleOffers,
     bestEligibleOffer,
     nextOffer,
-    roomsToNextOffer: nextOffer ? Math.max(0, nextOffer.milestone - completedRoomBookings) : 0,
+    roomNightsToNextOffer: nextOffer ? Math.max(0, nextOffer.milestone - completedRoomNights) : 0,
+    roomsToNextOffer: nextOffer ? Math.max(0, nextOffer.milestone - completedRoomNights) : 0,
     lastRedeemedAt: row.last_redeemed_at || null,
     lastBookingAt: row.last_booking_at || null,
     milestones: BOOKING_MILESTONE_OFFERS,
@@ -138,7 +140,7 @@ export async function getBookingMilestoneProgress(db, userId, options = {}) {
   if (!userId) return buildMilestoneProgress()
   const { rows } = await db.query(
     `WITH qualified_bookings AS (
-       SELECT id, rooms_count, metadata, coalesce(confirmed_at, created_at) AS activity_at
+       SELECT id, rooms_count, nights, metadata, coalesce(confirmed_at, created_at) AS activity_at
        FROM bookings
        WHERE user_id = $1
          AND status IN ('confirmed', 'completed')
@@ -151,9 +153,9 @@ export async function getBookingMilestoneProgress(db, userId, options = {}) {
        LIMIT 1
      )
      SELECT
-       coalesce(sum(qb.rooms_count) FILTER (
+       coalesce(sum(qb.rooms_count * qb.nights) FILTER (
          WHERE qb.activity_at > coalesce((SELECT activity_at FROM last_redemption), '-infinity'::timestamptz)
-       ), 0)::int AS completed_room_bookings,
+       ), 0)::int AS completed_room_nights,
        max(qb.activity_at) FILTER (
          WHERE qb.activity_at > coalesce((SELECT activity_at FROM last_redemption), '-infinity'::timestamptz)
        ) AS last_booking_at,
@@ -171,6 +173,7 @@ async function listMilestoneRedemptionHistory(db, userId) {
        b.id,
        b.booking_reference,
        b.rooms_count,
+       b.nights,
        b.total_amount,
        b.currency,
        coalesce(b.confirmed_at, b.created_at) AS redeemed_at,
@@ -190,6 +193,8 @@ async function listMilestoneRedemptionHistory(db, userId) {
     bookingReference: row.booking_reference,
     hotelName: row.hotel_name,
     roomsCount: Number(row.rooms_count || 0),
+    nights: Number(row.nights || 0),
+    roomNights: Number(row.rooms_count || 0) * Number(row.nights || 0),
     bookingTotal: Number(row.total_amount || 0),
     currency: row.currency || 'INR',
     redeemedAt: row.redeemed_at,
@@ -199,7 +204,8 @@ async function listMilestoneRedemptionHistory(db, userId) {
     redeemOnBooking: Number(row.redemption?.redeemOnBooking || 0),
     discountAmount: Number(row.redemption?.discountAmount || 0),
     faceValue: Number(row.redemption?.faceValue || 0),
-    completedRoomBookings: Number(row.redemption?.completedRoomBookings || 0),
+    completedRoomNights: Number(row.redemption?.completedRoomNights ?? row.redemption?.completedRoomBookings ?? 0),
+    completedRoomBookings: Number(row.redemption?.completedRoomNights ?? row.redemption?.completedRoomBookings ?? 0),
   }))
 }
 
@@ -435,7 +441,8 @@ export async function createBookingHold({ hotel, user, payload }) {
               redeemOnBooking: milestoneOffer.redeemOnBooking,
               discountAmount: milestoneDiscount,
               faceValue: Number(milestoneOffer.discountAmount || 0),
-              completedRoomBookings: milestoneProgress.completedRoomBookings,
+              completedRoomNights: milestoneProgress.completedRoomNights,
+              completedRoomBookings: milestoneProgress.completedRoomNights,
               resetAfterConfirmation: true,
             },
           }

@@ -54,6 +54,30 @@ textarea {
       transform: translateX(220%);
     }
   }
+
+  @keyframes loading-kenburns {
+    0% {
+      transform: scale(1.02);
+    }
+
+    100% {
+      transform: scale(1.1);
+    }
+  }
+
+  @keyframes loading-progress {
+    0% {
+      transform: translateX(-100%) scaleX(0.4);
+    }
+
+    55% {
+      transform: translateX(15%) scaleX(0.72);
+    }
+
+    100% {
+      transform: translateX(110%) scaleX(0.52);
+    }
+  }
 }
 
 @layer components {
@@ -262,6 +286,16 @@ textarea {
 
   .image-lift:hover img {
     @apply scale-[1.035];
+  }
+
+  .loading-kenburns {
+    animation: loading-kenburns 8s ease-out forwards;
+  }
+
+  .loading-progress {
+    animation: loading-progress 1.65s ease-in-out infinite;
+    transform-origin: left;
+    width: 58%;
   }
 
   .offer-marquee {

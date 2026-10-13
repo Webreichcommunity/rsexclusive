@@ -54,7 +54,7 @@ const groupHotelSeoItems = [
 ]
 
 export function GroupLanding() {
-  const { data, loading, error } = useAsync(() => apiFetch('/hotels'))
+  const { data, loading, error } = useAsync(() => apiFetch('/hotels', { skipAuth: true }))
   const hotels = useMemo(() => data?.hotels || [], [data?.hotels])
   const [activeHotelIndex, setActiveHotelIndex] = useState(0)
 
